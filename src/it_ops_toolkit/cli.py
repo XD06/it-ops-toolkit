@@ -6,14 +6,17 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
+from .assets import AssetScanError, run_asset_scan
 from .config import (
     DEFAULT_CONFIG_PATH,
     ConfigError,
+    OpsConfig,
     create_default_config_file,
     load_config,
 )
+from .models import TaskStatus
 from .storage import SQLiteStore, TaskRecordNotFound
-from .tasks import get_task, list_tasks
+from .tasks import finish_task_run, get_task, list_tasks, new_task_run
 
 console = Console()
 
@@ -24,8 +27,10 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 config_app = typer.Typer(help="配置管理。")
+asset_app = typer.Typer(help="资产发现。")
 task_app = typer.Typer(help="任务记录。")
 app.add_typer(config_app, name="config")
+app.add_typer(asset_app, name="asset")
 app.add_typer(task_app, name="task")
 
 
@@ -83,6 +88,82 @@ def config_validate(
     console.print(f"[green]配置校验通过：[/green]{config}")
     console.print(f"扫描配置数量：{len(loaded.scan_profiles)}")
     console.print(f"巡检配置数量：{len(loaded.health_profiles)}")
+
+
+@asset_app.command("scan")
+def asset_scan(
+    profile: Annotated[
+        str,
+        typer.Option("--profile", "-p", help="扫描配置名称。"),
+    ] = "office_lan",
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """执行基础资产发现。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        task = new_task_run(task_type="asset_scan")
+        store.save_task_run(task)
+        assets, results = run_asset_scan(
+            config=loaded,
+            profile_name=profile,
+            task=task,
+            store=store,
+        )
+        task = finish_task_run(task, status=TaskStatus.success)
+        task = task.model_copy(
+            update={
+                "result_refs": [result.id for result in results],
+                "target_refs": [asset.ip for asset in assets],
+            }
+        )
+        store.save_task_run(task)
+    except (ConfigError, AssetScanError) as exc:
+        if "task" in locals():
+            failed_task = finish_task_run(task, status=TaskStatus.failed)
+            store.save_task_run(failed_task)
+        console.print(f"[red]资产扫描失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]资产扫描完成：[/green]{task.id}")
+    console.print(f"发现在线资产：{len(assets)}")
+    console.print(f"探测结果数量：{len(results)}")
+
+
+@asset_app.command("list")
+def asset_list(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """查看已发现资产。"""
+    try:
+        store = _store_from_config(config)
+        assets = store.list_assets()
+    except ConfigError as exc:
+        console.print(f"[red]读取资产失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    table = Table(title="资产列表")
+    table.add_column("IP")
+    table.add_column("主机名")
+    table.add_column("状态")
+    table.add_column("开放端口")
+    table.add_column("最后发现")
+
+    for asset in assets:
+        table.add_row(
+            asset.ip,
+            asset.hostname or "",
+            asset.status,
+            ",".join(str(port) for port in asset.open_ports),
+            asset.last_seen.isoformat(),
+        )
+
+    console.print(table)
 
 
 @task_app.command("list")
@@ -158,8 +239,13 @@ def task_show(
 
 
 def _store_from_config(config_path: Path) -> SQLiteStore:
+    loaded, store = _load_config_and_store(config_path)
+    return store
+
+
+def _load_config_and_store(config_path: Path) -> tuple[OpsConfig, SQLiteStore]:
     loaded = load_config(config_path)
     storage_path = loaded.storage.path
     if not storage_path.is_absolute():
         storage_path = config_path.resolve().parent / storage_path
-    return SQLiteStore(storage_path.resolve())
+    return loaded, SQLiteStore(storage_path.resolve())

@@ -32,3 +32,11 @@ def list_tasks(store: SQLiteStore, *, limit: int = 20) -> list[TaskRun]:
 def get_task(store: SQLiteStore, task_id: str) -> TaskRun:
     return store.get_task_run(task_id)
 
+
+def finish_task_run(task: TaskRun, *, status: TaskStatus) -> TaskRun:
+    return task.model_copy(
+        update={
+            "status": status,
+            "ended_at": datetime.now(UTC),
+        }
+    )

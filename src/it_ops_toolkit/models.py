@@ -69,6 +69,21 @@ class ProbeResult(BaseModel):
     evidence: dict[str, Any] = Field(default_factory=dict)
 
 
+class Asset(BaseModel):
+    id: str
+    ip: str
+    hostname: str | None = None
+    mac: str | None = None
+    vendor: str | None = None
+    os_hint: str | None = None
+    asset_type: str | None = None
+    open_ports: list[int] = Field(default_factory=list)
+    first_seen: datetime
+    last_seen: datetime
+    status: Literal["active", "missing", "unknown"] = "active"
+    source: str = "asset_scan"
+
+
 class TaskRun(BaseModel):
     id: str
     task_type: Literal["asset_scan", "health_check", "diagnosis", "report_generate"]
@@ -81,4 +96,3 @@ class TaskRun(BaseModel):
     target_refs: list[str] = Field(default_factory=list)
     result_refs: list[str] = Field(default_factory=list)
     log_refs: list[str] = Field(default_factory=list)
-

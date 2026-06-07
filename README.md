@@ -80,6 +80,10 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - 基础数据模型。
 - SQLite 本地存储骨架。
 - `TaskRun` 任务记录读写。
+- Ping Probe。
+- TCP Probe。
+- `ops asset scan`。
+- `ops asset list`。
 - `ops task list`。
 - `ops task show`。
 - 配置模块单元测试。
@@ -91,6 +95,8 @@ $env:PYTHONPATH='src'
 python -m it_ops_toolkit --version
 python -m it_ops_toolkit config init --path .\ops.yaml
 python -m it_ops_toolkit config validate --config .\ops.yaml
+python -m it_ops_toolkit asset scan --config .\ops.yaml --profile office_lan
+python -m it_ops_toolkit asset list --config .\ops.yaml
 python -m it_ops_toolkit task list --config .\ops.yaml
 python -m unittest discover -s tests
 ```

@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .models import RiskLevel, TaskRun, TaskStatus
+from .models import Asset, ErrorInfo, ProbeResult, ProbeStatus, RiskLevel, Target, TaskRun, TaskStatus
 
 
 SCHEMA_SQL = """
@@ -27,6 +27,43 @@ CREATE TABLE IF NOT EXISTS task_runs (
 
 CREATE INDEX IF NOT EXISTS idx_task_runs_started_at
 ON task_runs(started_at);
+
+CREATE TABLE IF NOT EXISTS assets (
+    id TEXT PRIMARY KEY,
+    ip TEXT NOT NULL,
+    hostname TEXT,
+    mac TEXT,
+    vendor TEXT,
+    os_hint TEXT,
+    asset_type TEXT,
+    open_ports TEXT NOT NULL,
+    first_seen TEXT NOT NULL,
+    last_seen TEXT NOT NULL,
+    status TEXT NOT NULL,
+    source TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_assets_ip
+ON assets(ip);
+
+CREATE TABLE IF NOT EXISTS probe_results (
+    id TEXT NOT NULL,
+    task_id TEXT NOT NULL,
+    request_id TEXT,
+    probe_type TEXT NOT NULL,
+    target TEXT NOT NULL,
+    status TEXT NOT NULL,
+    started_at TEXT NOT NULL,
+    ended_at TEXT,
+    duration_ms INTEGER,
+    observations TEXT NOT NULL,
+    error TEXT,
+    evidence TEXT NOT NULL,
+    PRIMARY KEY (id, task_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_probe_results_task_id
+ON probe_results(task_id);
 """
 
 
@@ -112,6 +149,113 @@ class SQLiteStore:
             raise TaskRecordNotFound(f"task not found: {task_id}")
         return self._row_to_task(row)
 
+    def save_asset(self, asset: Asset) -> None:
+        self.ensure_schema()
+        existing = self.get_asset_by_ip(asset.ip)
+        first_seen = existing.first_seen if existing else asset.first_seen
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO assets (
+                    id,
+                    ip,
+                    hostname,
+                    mac,
+                    vendor,
+                    os_hint,
+                    asset_type,
+                    open_ports,
+                    first_seen,
+                    last_seen,
+                    status,
+                    source
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    asset.id,
+                    asset.ip,
+                    asset.hostname,
+                    asset.mac,
+                    asset.vendor,
+                    asset.os_hint,
+                    asset.asset_type,
+                    json.dumps(asset.open_ports, ensure_ascii=False),
+                    first_seen.isoformat(),
+                    asset.last_seen.isoformat(),
+                    asset.status,
+                    asset.source,
+                ),
+            )
+
+    def list_assets(self) -> list[Asset]:
+        self.ensure_schema()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM assets
+                ORDER BY ip ASC
+                """
+            ).fetchall()
+        return [self._row_to_asset(row) for row in rows]
+
+    def get_asset_by_ip(self, ip: str) -> Asset | None:
+        self.ensure_schema()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM assets WHERE ip = ?",
+                (ip,),
+            ).fetchone()
+        return self._row_to_asset(row) if row else None
+
+    def save_probe_result(self, result: ProbeResult) -> None:
+        self.ensure_schema()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO probe_results (
+                    id,
+                    task_id,
+                    request_id,
+                    probe_type,
+                    target,
+                    status,
+                    started_at,
+                    ended_at,
+                    duration_ms,
+                    observations,
+                    error,
+                    evidence
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    result.id,
+                    result.task_id,
+                    result.request_id,
+                    result.probe_type,
+                    result.target.model_dump_json(),
+                    result.status.value,
+                    result.started_at.isoformat(),
+                    result.ended_at.isoformat() if result.ended_at else None,
+                    result.duration_ms,
+                    json.dumps(result.observations, ensure_ascii=False),
+                    result.error.model_dump_json() if result.error else None,
+                    json.dumps(result.evidence, ensure_ascii=False),
+                ),
+            )
+
+    def list_probe_results_for_task(self, task_id: str) -> list[ProbeResult]:
+        self.ensure_schema()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM probe_results
+                WHERE task_id = ?
+                ORDER BY started_at ASC
+                """,
+                (task_id,),
+            ).fetchall()
+        return [self._row_to_probe_result(row) for row in rows]
+
     def _row_to_task(self, row: sqlite3.Row) -> TaskRun:
         values: dict[str, Any] = dict(row)
         return TaskRun(
@@ -128,3 +272,37 @@ class SQLiteStore:
             log_refs=json.loads(values["log_refs"]),
         )
 
+    def _row_to_asset(self, row: sqlite3.Row) -> Asset:
+        values: dict[str, Any] = dict(row)
+        return Asset(
+            id=values["id"],
+            ip=values["ip"],
+            hostname=values["hostname"],
+            mac=values["mac"],
+            vendor=values["vendor"],
+            os_hint=values["os_hint"],
+            asset_type=values["asset_type"],
+            open_ports=json.loads(values["open_ports"]),
+            first_seen=values["first_seen"],
+            last_seen=values["last_seen"],
+            status=values["status"],
+            source=values["source"],
+        )
+
+    def _row_to_probe_result(self, row: sqlite3.Row) -> ProbeResult:
+        values: dict[str, Any] = dict(row)
+        error = ErrorInfo.model_validate_json(values["error"]) if values["error"] else None
+        return ProbeResult(
+            id=values["id"],
+            request_id=values["request_id"],
+            task_id=values["task_id"],
+            probe_type=values["probe_type"],
+            target=Target.model_validate_json(values["target"]),
+            status=ProbeStatus(values["status"]),
+            started_at=values["started_at"],
+            ended_at=values["ended_at"],
+            duration_ms=values["duration_ms"],
+            observations=json.loads(values["observations"]),
+            error=error,
+            evidence=json.loads(values["evidence"]),
+        )
