@@ -3,6 +3,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from . import __version__
 from .config import (
@@ -11,6 +12,8 @@ from .config import (
     create_default_config_file,
     load_config,
 )
+from .storage import SQLiteStore, TaskRecordNotFound
+from .tasks import get_task, list_tasks
 
 console = Console()
 
@@ -21,7 +24,9 @@ app = typer.Typer(
     invoke_without_command=True,
 )
 config_app = typer.Typer(help="配置管理。")
+task_app = typer.Typer(help="任务记录。")
 app.add_typer(config_app, name="config")
+app.add_typer(task_app, name="task")
 
 
 def main() -> None:
@@ -78,3 +83,83 @@ def config_validate(
     console.print(f"[green]配置校验通过：[/green]{config}")
     console.print(f"扫描配置数量：{len(loaded.scan_profiles)}")
     console.print(f"巡检配置数量：{len(loaded.health_profiles)}")
+
+
+@task_app.command("list")
+def task_list(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", "-n", min=1, max=200, help="最大返回数量。"),
+    ] = 20,
+) -> None:
+    """查看任务历史。"""
+    try:
+        store = _store_from_config(config)
+        tasks = list_tasks(store, limit=limit)
+    except ConfigError as exc:
+        console.print(f"[red]读取任务失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    table = Table(title="任务历史")
+    table.add_column("ID")
+    table.add_column("类型")
+    table.add_column("状态")
+    table.add_column("风险")
+    table.add_column("开始时间")
+    table.add_column("结束时间")
+
+    for task in tasks:
+        table.add_row(
+            task.id,
+            task.task_type,
+            task.status.value,
+            task.risk_level.value,
+            task.started_at.isoformat(),
+            task.ended_at.isoformat() if task.ended_at else "",
+        )
+
+    console.print(table)
+
+
+@task_app.command("show")
+def task_show(
+    task_id: Annotated[str, typer.Argument(help="任务 ID。")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """查看任务详情。"""
+    try:
+        store = _store_from_config(config)
+        task = get_task(store, task_id)
+    except ConfigError as exc:
+        console.print(f"[red]读取任务失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+    except TaskRecordNotFound as exc:
+        console.print(f"[red]任务不存在：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[bold]任务 ID：[/bold]{task.id}")
+    console.print(f"[bold]类型：[/bold]{task.task_type}")
+    console.print(f"[bold]状态：[/bold]{task.status.value}")
+    console.print(f"[bold]风险：[/bold]{task.risk_level.value}")
+    console.print(f"[bold]来源：[/bold]{task.source}")
+    console.print(f"[bold]执行人：[/bold]{task.requested_by}")
+    console.print(f"[bold]开始时间：[/bold]{task.started_at.isoformat()}")
+    console.print(f"[bold]结束时间：[/bold]{task.ended_at.isoformat() if task.ended_at else ''}")
+    console.print(f"[bold]目标引用：[/bold]{task.target_refs}")
+    console.print(f"[bold]结果引用：[/bold]{task.result_refs}")
+    console.print(f"[bold]日志引用：[/bold]{task.log_refs}")
+
+
+def _store_from_config(config_path: Path) -> SQLiteStore:
+    loaded = load_config(config_path)
+    storage_path = loaded.storage.path
+    if not storage_path.is_absolute():
+        storage_path = config_path.resolve().parent / storage_path
+    return SQLiteStore(storage_path.resolve())

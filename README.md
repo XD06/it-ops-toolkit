@@ -78,6 +78,10 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - `ops config validate`。
 - 配置模型和校验。
 - 基础数据模型。
+- SQLite 本地存储骨架。
+- `TaskRun` 任务记录读写。
+- `ops task list`。
+- `ops task show`。
 - 配置模块单元测试。
 
 开发环境直接运行：
@@ -87,5 +91,6 @@ $env:PYTHONPATH='src'
 python -m it_ops_toolkit --version
 python -m it_ops_toolkit config init --path .\ops.yaml
 python -m it_ops_toolkit config validate --config .\ops.yaml
+python -m it_ops_toolkit task list --config .\ops.yaml
 python -m unittest discover -s tests
 ```
