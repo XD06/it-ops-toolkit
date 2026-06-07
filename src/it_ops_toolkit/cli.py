@@ -14,6 +14,7 @@ from .config import (
     create_default_config_file,
     load_config,
 )
+from .health import HealthCheckError, run_health_check
 from .models import TaskStatus
 from .storage import SQLiteStore, TaskRecordNotFound
 from .tasks import finish_task_run, get_task, list_tasks, new_task_run
@@ -28,9 +29,11 @@ app = typer.Typer(
 )
 config_app = typer.Typer(help="配置管理。")
 asset_app = typer.Typer(help="资产发现。")
+health_app = typer.Typer(help="网络与服务巡检。")
 task_app = typer.Typer(help="任务记录。")
 app.add_typer(config_app, name="config")
 app.add_typer(asset_app, name="asset")
+app.add_typer(health_app, name="health")
 app.add_typer(task_app, name="task")
 
 
@@ -164,6 +167,49 @@ def asset_list(
         )
 
     console.print(table)
+
+
+@health_app.command("check")
+def health_check(
+    profile: Annotated[
+        str,
+        typer.Option("--profile", "-p", help="巡检配置名称。"),
+    ] = "daily_basic",
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """执行网络与服务巡检。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        task = new_task_run(task_type="health_check")
+        store.save_task_run(task)
+        results = run_health_check(
+            config=loaded,
+            profile_name=profile,
+            task=task,
+            store=store,
+        )
+        task = finish_task_run(task, status=TaskStatus.success)
+        task = task.model_copy(
+            update={
+                "result_refs": [result.id for result in results],
+                "target_refs": [result.target.value for result in results],
+            }
+        )
+        store.save_task_run(task)
+    except (ConfigError, HealthCheckError) as exc:
+        if "task" in locals():
+            failed_task = finish_task_run(task, status=TaskStatus.failed)
+            store.save_task_run(failed_task)
+        console.print(f"[red]巡检失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    success_count = sum(1 for result in results if result.status == "success")
+    console.print(f"[green]巡检完成：[/green]{task.id}")
+    console.print(f"成功检查：{success_count}")
+    console.print(f"总检查数：{len(results)}")
 
 
 @task_app.command("list")

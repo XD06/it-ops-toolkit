@@ -82,8 +82,11 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - `TaskRun` 任务记录读写。
 - Ping Probe。
 - TCP Probe。
+- DNS Probe，当前使用系统解析器。
+- HTTP Probe。
 - `ops asset scan`。
 - `ops asset list`。
+- `ops health check`。
 - `ops task list`。
 - `ops task show`。
 - 配置模块单元测试。
@@ -97,6 +100,7 @@ python -m it_ops_toolkit config init --path .\ops.yaml
 python -m it_ops_toolkit config validate --config .\ops.yaml
 python -m it_ops_toolkit asset scan --config .\ops.yaml --profile office_lan
 python -m it_ops_toolkit asset list --config .\ops.yaml
+python -m it_ops_toolkit health check --config .\ops.yaml --profile daily_basic
 python -m it_ops_toolkit task list --config .\ops.yaml
 python -m unittest discover -s tests
 ```
