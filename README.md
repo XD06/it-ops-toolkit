@@ -93,6 +93,7 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - `ops task list`。
 - `ops task show`，包含任务下的探测结果。
 - `ops report generate`，支持 Markdown、CSV、JSON。
+- `ops export bundle`。
 - 配置模块单元测试。
 
 开发环境直接运行：
@@ -111,5 +112,6 @@ python -m it_ops_toolkit diagnose intranet --config .\ops.yaml --url https://int
 python -m it_ops_toolkit task list --config .\ops.yaml
 python -m it_ops_toolkit task show <task-id> --config .\ops.yaml
 python -m it_ops_toolkit report generate --config .\ops.yaml --task <task-id> --format markdown
+python -m it_ops_toolkit export bundle --config .\ops.yaml --task <task-id>
 python -m unittest discover -s tests
 ```

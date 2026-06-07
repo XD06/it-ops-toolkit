@@ -21,6 +21,7 @@ from .diagnosis import (
     run_intranet_diagnosis,
     run_internet_diagnosis,
 )
+from .export import ExportError, default_bundle_path, export_bundle
 from .health import HealthCheckError, run_health_check
 from .models import TaskStatus
 from .reports import ReportError, generate_report
@@ -39,12 +40,14 @@ config_app = typer.Typer(help="配置管理。")
 asset_app = typer.Typer(help="资产发现。")
 health_app = typer.Typer(help="网络与服务巡检。")
 diagnose_app = typer.Typer(help="场景化故障诊断。")
+export_app = typer.Typer(help="诊断包导出。")
 report_app = typer.Typer(help="报告输出。")
 task_app = typer.Typer(help="任务记录。")
 app.add_typer(config_app, name="config")
 app.add_typer(asset_app, name="asset")
 app.add_typer(health_app, name="health")
 app.add_typer(diagnose_app, name="diagnose")
+app.add_typer(export_app, name="export")
 app.add_typer(report_app, name="report")
 app.add_typer(task_app, name="task")
 
@@ -433,6 +436,42 @@ def report_generate(
 
     console.print(f"[green]报告已生成：[/green]{report.path}")
     console.print(f"报告 ID：{report.id}")
+
+
+@export_app.command("bundle")
+def export_diagnostic_bundle(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+    task_id: Annotated[
+        str | None,
+        typer.Option("--task", "-t", help="只导出指定任务。"),
+    ] = None,
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="输出 zip 路径。"),
+    ] = None,
+) -> None:
+    """导出诊断包。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        output_path = output
+        if output_path is None:
+            output_path = default_bundle_path(config.resolve().parent / "bundles")
+        elif not output_path.is_absolute():
+            output_path = config.resolve().parent / output_path
+        bundle = export_bundle(
+            config=loaded,
+            store=store,
+            output_path=output_path.resolve(),
+            task_id=task_id,
+        )
+    except (ConfigError, ExportError, TaskRecordNotFound) as exc:
+        console.print(f"[red]导出诊断包失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]诊断包已生成：[/green]{bundle}")
 
 
 @task_app.command("list")

@@ -280,6 +280,17 @@ class SQLiteStore:
             ).fetchall()
         return [self._row_to_probe_result(row) for row in rows]
 
+    def list_all_probe_results(self) -> list[ProbeResult]:
+        self.ensure_schema()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM probe_results
+                ORDER BY started_at ASC
+                """
+            ).fetchall()
+        return [self._row_to_probe_result(row) for row in rows]
+
     def save_report(self, report: Report) -> None:
         self.ensure_schema()
         with self.connect() as connection:

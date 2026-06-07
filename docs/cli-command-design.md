@@ -35,6 +35,7 @@ ops task list
 ops task show
 
 ops report generate
+ops export bundle
 ```
 
 ## config 命令
@@ -252,6 +253,28 @@ ops report generate --task task-001 --format markdown
 - 能读取任务结果。
 - 能生成 Markdown 报告。
 - 能输出报告路径。
+
+## export 命令
+
+### ops export bundle
+
+用途：
+
+导出诊断包，便于交接、留档或发给同事分析。
+
+示例：
+
+```powershell
+ops export bundle --config ./ops.yaml
+ops export bundle --config ./ops.yaml --task task-001
+ops export bundle --config ./ops.yaml --task task-001 --output ./bundles/task-001.zip
+```
+
+验收：
+
+- 能输出 zip 文件。
+- zip 中包含配置摘要、任务、资产、探测结果和摘要文档。
+- 不直接打包完整原始配置，降低敏感信息泄露风险。
 
 ## 全局参数
 
