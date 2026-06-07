@@ -172,6 +172,39 @@ def asset_list(
     console.print(table)
 
 
+@asset_app.command("show")
+def asset_show(
+    ip: Annotated[str, typer.Argument(help="资产 IP。")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """查看单个资产详情。"""
+    try:
+        store = _store_from_config(config)
+        asset = store.get_asset_by_ip(ip)
+    except ConfigError as exc:
+        console.print(f"[red]读取资产失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    if asset is None:
+        console.print(f"[red]资产不存在：[/red]{ip}")
+        raise typer.Exit(code=1)
+
+    console.print(f"[bold]IP：[/bold]{asset.ip}")
+    console.print(f"[bold]主机名：[/bold]{asset.hostname or ''}")
+    console.print(f"[bold]MAC：[/bold]{asset.mac or ''}")
+    console.print(f"[bold]厂商：[/bold]{asset.vendor or ''}")
+    console.print(f"[bold]系统线索：[/bold]{asset.os_hint or ''}")
+    console.print(f"[bold]设备类型：[/bold]{asset.asset_type or ''}")
+    console.print(f"[bold]开放端口：[/bold]{','.join(str(port) for port in asset.open_ports)}")
+    console.print(f"[bold]状态：[/bold]{asset.status}")
+    console.print(f"[bold]首次发现：[/bold]{asset.first_seen.isoformat()}")
+    console.print(f"[bold]最后发现：[/bold]{asset.last_seen.isoformat()}")
+    console.print(f"[bold]来源：[/bold]{asset.source}")
+
+
 @health_app.command("check")
 def health_check(
     profile: Annotated[
@@ -333,6 +366,28 @@ def task_show(
     console.print(f"[bold]目标引用：[/bold]{task.target_refs}")
     console.print(f"[bold]结果引用：[/bold]{task.result_refs}")
     console.print(f"[bold]日志引用：[/bold]{task.log_refs}")
+
+    results = store.list_probe_results_for_task(task.id)
+    if not results:
+        return
+
+    table = Table(title="探测结果")
+    table.add_column("类型")
+    table.add_column("目标")
+    table.add_column("状态")
+    table.add_column("耗时 ms")
+    table.add_column("错误")
+
+    for result in results:
+        table.add_row(
+            result.probe_type,
+            result.target.value,
+            result.status.value,
+            str(result.duration_ms or ""),
+            result.error.message if result.error else "",
+        )
+
+    console.print(table)
 
 
 def _store_from_config(config_path: Path) -> SQLiteStore:

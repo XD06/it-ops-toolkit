@@ -64,7 +64,7 @@ health_profiles:
           - http
 
 probe_defaults:
-  timeout_ms: 3000
+  timeout_ms: 1000
   retries: 1
   concurrency: 32
 

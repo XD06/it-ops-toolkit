@@ -43,7 +43,7 @@ class HealthProfile(BaseModel):
 
 
 class ProbeDefaults(BaseModel):
-    timeout_ms: int = Field(default=3000, gt=0)
+    timeout_ms: int = Field(default=1000, gt=0)
     retries: int = Field(default=1, ge=0)
     concurrency: int = Field(default=32, gt=0)
 
@@ -130,7 +130,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         }
     },
     "probe_defaults": {
-        "timeout_ms": 3000,
+        "timeout_ms": 1000,
         "retries": 1,
         "concurrency": 32,
     },
@@ -177,4 +177,3 @@ def load_config(path: Path) -> OpsConfig:
         raise ConfigError(str(exc)) from exc
     except yaml.YAMLError as exc:
         raise ConfigError(f"invalid YAML: {exc}") from exc
-
