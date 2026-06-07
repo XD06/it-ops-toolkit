@@ -65,3 +65,27 @@
 - [ADR 索引](docs/adr/README.md)
 
 模块设计文档位于 [docs/modules](docs/modules)。
+
+## 当前代码状态
+
+Phase 1 已开始搭建 Python CLI 骨架。
+
+当前已实现：
+
+- Python 包结构。
+- Typer CLI 入口。
+- `ops config init`。
+- `ops config validate`。
+- 配置模型和校验。
+- 基础数据模型。
+- 配置模块单元测试。
+
+开发环境直接运行：
+
+```powershell
+$env:PYTHONPATH='src'
+python -m it_ops_toolkit --version
+python -m it_ops_toolkit config init --path .\ops.yaml
+python -m it_ops_toolkit config validate --config .\ops.yaml
+python -m unittest discover -s tests
+```

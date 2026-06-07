@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "it-ops-toolkit"
+version = "0.1.0"
+description = "CLI-first IT operations toolkit for SMB environments."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "pydantic>=2",
+  "PyYAML>=6",
+  "rich>=13",
+  "typer>=0.12",
+]
+
+[project.scripts]
+ops = "it_ops_toolkit.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
