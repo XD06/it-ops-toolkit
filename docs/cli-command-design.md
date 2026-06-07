@@ -29,6 +29,7 @@ ops asset show
 ops health check
 
 ops diagnose internet
+ops diagnose intranet
 
 ops task list
 ops task show
@@ -172,6 +173,28 @@ ops diagnose internet --external-ip 223.5.5.5 --dns-name www.baidu.com --http-ur
 
 - 能检查外部 IP 连通性。
 - 能检查 DNS 解析。
+- 能检查 HTTP/HTTPS 访问。
+- 能输出可能范围和下一步建议。
+- 能保存任务和探测结果。
+
+### ops diagnose intranet
+
+用途：
+
+诊断“内网系统打不开”的基础链路。
+
+示例：
+
+```powershell
+ops diagnose intranet --url https://intranet.example.local --config ./ops.yaml
+```
+
+验收：
+
+- 能解析目标 URL。
+- 能检查 DNS。
+- 能检查目标主机连通性。
+- 能检查业务端口。
 - 能检查 HTTP/HTTPS 访问。
 - 能输出可能范围和下一步建议。
 - 能保存任务和探测结果。

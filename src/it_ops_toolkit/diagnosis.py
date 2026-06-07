@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from ipaddress import ip_address
+from urllib.parse import urlparse
 
 from .models import ProbeResult, ProbeStatus, TaskRun
-from .probes import check_http_url, ping_host, resolve_hostname
+from .probes import check_http_url, check_tcp_port, ping_host, resolve_hostname
 from .storage import SQLiteStore
 
 
@@ -86,6 +88,109 @@ def classify_internet_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
     )
 
 
+def run_intranet_diagnosis(
+    *,
+    task: TaskRun,
+    store: SQLiteStore,
+    url: str,
+    timeout_ms: int = 1000,
+    retries: int = 1,
+) -> tuple[list[ProbeResult], DiagnosisSummary]:
+    target = parse_service_url(url)
+    results: list[ProbeResult] = []
+
+    if not _is_ip_address(target["host"]):
+        results.append(
+            resolve_hostname(
+                task_id=task.id,
+                hostname=target["host"],
+                timeout_ms=timeout_ms,
+            )
+        )
+
+    results.extend(
+        [
+            ping_host(
+                task_id=task.id,
+                target=target["host"],
+                timeout_ms=timeout_ms,
+                retries=retries,
+            ),
+            check_tcp_port(
+                task_id=task.id,
+                target=target["host"],
+                port=target["port"],
+                timeout_ms=timeout_ms,
+            ),
+            check_http_url(
+                task_id=task.id,
+                url=target["url"],
+                timeout_ms=timeout_ms,
+            ),
+        ]
+    )
+
+    for result in results:
+        store.save_probe_result(result)
+    return results, classify_intranet_diagnosis(results)
+
+
+def classify_intranet_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
+    dns_result = _first_result(results, "dns")
+    ping_result = _first_result(results, "ping")
+    tcp_result = _first_result(results, "tcp")
+    http_result = _first_result(results, "http")
+
+    dns_ok = dns_result is None or _is_success(dns_result)
+    ping_ok = _is_success(ping_result)
+    tcp_ok = _is_success(tcp_result)
+    http_ok = _is_success(http_result)
+
+    if not dns_ok:
+        return DiagnosisSummary(
+            title="内网系统域名解析异常",
+            likely_area="内网 DNS、主机名配置、搜索域或 DNS 转发",
+            recommendation="先确认域名是否正确，再检查本机 DNS、内网 DNS 服务和解析记录。",
+        )
+    if not ping_ok and not tcp_ok:
+        return DiagnosisSummary(
+            title="目标主机或网络路径不可达",
+            likely_area="目标服务器、路由、ACL、防火墙、网段隔离",
+            recommendation="检查目标服务器是否在线、网关路由是否正确，以及防火墙/ACL 是否阻断。",
+        )
+    if not tcp_ok:
+        return DiagnosisSummary(
+            title="目标主机可达，但业务端口不可达",
+            likely_area="服务未启动、本机或服务器防火墙、端口策略、负载均衡",
+            recommendation="检查目标服务端口、应用服务状态、防火墙策略和反向代理/负载均衡。",
+        )
+    if not http_ok:
+        return DiagnosisSummary(
+            title="端口可达，但 HTTP/HTTPS 访问异常",
+            likely_area="Web 应用、证书、认证、反向代理、应用错误",
+            recommendation="查看浏览器错误、HTTP 状态、证书、应用日志和反向代理配置。",
+        )
+    return DiagnosisSummary(
+        title="内网系统基础访问链路正常",
+        likely_area="未发现 DNS、网络路径、端口或 HTTP 基础异常",
+        recommendation="如果用户仍然打不开，继续检查账号权限、浏览器缓存、代理、应用业务状态或用户终端环境。",
+    )
+
+
+def parse_service_url(url: str) -> dict[str, object]:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("URL must include http:// or https:// and a hostname")
+    port = parsed.port
+    if port is None:
+        port = 443 if parsed.scheme == "https" else 80
+    return {
+        "url": url,
+        "host": parsed.hostname,
+        "port": port,
+    }
+
+
 def _first_result(results: list[ProbeResult], probe_type: str) -> ProbeResult | None:
     return next((result for result in results if result.probe_type == probe_type), None)
 
@@ -93,3 +198,10 @@ def _first_result(results: list[ProbeResult], probe_type: str) -> ProbeResult | 
 def _is_success(result: ProbeResult | None) -> bool:
     return result is not None and result.status == ProbeStatus.success
 
+
+def _is_ip_address(value: str) -> bool:
+    try:
+        ip_address(value)
+    except ValueError:
+        return False
+    return True

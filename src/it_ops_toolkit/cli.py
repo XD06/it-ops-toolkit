@@ -18,6 +18,7 @@ from .diagnosis import (
     DEFAULT_DNS_NAME,
     DEFAULT_EXTERNAL_IP,
     DEFAULT_HTTP_URL,
+    run_intranet_diagnosis,
     run_internet_diagnosis,
 )
 from .health import HealthCheckError, run_health_check
@@ -305,6 +306,66 @@ def diagnose_internet(
         raise typer.Exit(code=1) from exc
 
     table = Table(title="互联网连通性诊断")
+    table.add_column("检查")
+    table.add_column("目标")
+    table.add_column("状态")
+    table.add_column("耗时 ms")
+    table.add_column("错误")
+    for result in results:
+        table.add_row(
+            result.probe_type,
+            result.target.value,
+            result.status.value,
+            str(result.duration_ms or ""),
+            result.error.message if result.error else "",
+        )
+
+    console.print(table)
+    console.print(f"[bold]结论：[/bold]{summary.title}")
+    console.print(f"[bold]可能范围：[/bold]{summary.likely_area}")
+    console.print(f"[bold]建议：[/bold]{summary.recommendation}")
+    console.print(f"[bold]任务 ID：[/bold]{task.id}")
+
+
+@diagnose_app.command("intranet")
+def diagnose_intranet(
+    url: Annotated[
+        str,
+        typer.Option("--url", "-u", help="打不开的内网系统 URL。"),
+    ],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """诊断内网系统基础访问链路。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        task = new_task_run(task_type="diagnosis")
+        store.save_task_run(task)
+        results, summary = run_intranet_diagnosis(
+            task=task,
+            store=store,
+            url=url,
+            timeout_ms=loaded.probe_defaults.timeout_ms,
+            retries=loaded.probe_defaults.retries,
+        )
+        task = finish_task_run(task, status=TaskStatus.success)
+        task = task.model_copy(
+            update={
+                "target_refs": [url],
+                "result_refs": [result.id for result in results],
+            }
+        )
+        store.save_task_run(task)
+    except (ConfigError, ValueError) as exc:
+        if "task" in locals():
+            failed_task = finish_task_run(task, status=TaskStatus.failed)
+            store.save_task_run(failed_task)
+        console.print(f"[red]诊断失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    table = Table(title="内网系统访问诊断")
     table.add_column("检查")
     table.add_column("目标")
     table.add_column("状态")

@@ -1,7 +1,11 @@
 import unittest
 from datetime import UTC, datetime
 
-from it_ops_toolkit.diagnosis import classify_internet_diagnosis
+from it_ops_toolkit.diagnosis import (
+    classify_internet_diagnosis,
+    classify_intranet_diagnosis,
+    parse_service_url,
+)
 from it_ops_toolkit.models import ProbeResult, ProbeStatus, Target
 
 
@@ -28,6 +32,24 @@ class DiagnosisTests(unittest.TestCase):
 
         self.assertEqual(summary.title, "基础互联网连通性正常")
 
+    def test_parse_service_url_uses_default_https_port(self) -> None:
+        parsed = parse_service_url("https://intranet.example.local/path")
+
+        self.assertEqual(parsed["host"], "intranet.example.local")
+        self.assertEqual(parsed["port"], 443)
+
+    def test_classifies_intranet_tcp_issue(self) -> None:
+        results = [
+            _result("dns", "intranet.example.local", ProbeStatus.success),
+            _result("ping", "intranet.example.local", ProbeStatus.success),
+            _result("tcp", "intranet.example.local", ProbeStatus.failed),
+            _result("http", "https://intranet.example.local", ProbeStatus.failed),
+        ]
+
+        summary = classify_intranet_diagnosis(results)
+
+        self.assertEqual(summary.title, "目标主机可达，但业务端口不可达")
+
 
 def _result(probe_type: str, target: str, status: ProbeStatus) -> ProbeResult:
     now = datetime.now(UTC)
@@ -45,4 +67,3 @@ def _result(probe_type: str, target: str, status: ProbeStatus) -> ProbeResult:
 
 if __name__ == "__main__":
     unittest.main()
-
