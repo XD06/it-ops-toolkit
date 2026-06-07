@@ -7,7 +7,17 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from .models import Asset, ErrorInfo, ProbeResult, ProbeStatus, RiskLevel, Target, TaskRun, TaskStatus
+from .models import (
+    Asset,
+    ErrorInfo,
+    ProbeResult,
+    ProbeStatus,
+    Report,
+    RiskLevel,
+    Target,
+    TaskRun,
+    TaskStatus,
+)
 
 
 SCHEMA_SQL = """
@@ -64,6 +74,20 @@ CREATE TABLE IF NOT EXISTS probe_results (
 
 CREATE INDEX IF NOT EXISTS idx_probe_results_task_id
 ON probe_results(task_id);
+
+CREATE TABLE IF NOT EXISTS reports (
+    id TEXT PRIMARY KEY,
+    source_task_id TEXT NOT NULL,
+    report_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    format TEXT NOT NULL,
+    path TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_reports_source_task_id
+ON reports(source_task_id);
 """
 
 
@@ -255,6 +279,34 @@ class SQLiteStore:
                 (task_id,),
             ).fetchall()
         return [self._row_to_probe_result(row) for row in rows]
+
+    def save_report(self, report: Report) -> None:
+        self.ensure_schema()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO reports (
+                    id,
+                    source_task_id,
+                    report_type,
+                    title,
+                    format,
+                    path,
+                    summary,
+                    generated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    report.id,
+                    report.source_task_id,
+                    report.report_type,
+                    report.title,
+                    report.format,
+                    report.path,
+                    report.summary,
+                    report.generated_at.isoformat(),
+                ),
+            )
 
     def _row_to_task(self, row: sqlite3.Row) -> TaskRun:
         values: dict[str, Any] = dict(row)

@@ -89,6 +89,7 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - `ops health check`。
 - `ops task list`。
 - `ops task show`。
+- `ops report generate`，支持 Markdown、CSV、JSON。
 - 配置模块单元测试。
 
 开发环境直接运行：
@@ -102,5 +103,6 @@ python -m it_ops_toolkit asset scan --config .\ops.yaml --profile office_lan
 python -m it_ops_toolkit asset list --config .\ops.yaml
 python -m it_ops_toolkit health check --config .\ops.yaml --profile daily_basic
 python -m it_ops_toolkit task list --config .\ops.yaml
+python -m it_ops_toolkit report generate --config .\ops.yaml --task <task-id> --format markdown
 python -m unittest discover -s tests
 ```

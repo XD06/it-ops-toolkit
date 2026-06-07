@@ -96,3 +96,14 @@ class TaskRun(BaseModel):
     target_refs: list[str] = Field(default_factory=list)
     result_refs: list[str] = Field(default_factory=list)
     log_refs: list[str] = Field(default_factory=list)
+
+
+class Report(BaseModel):
+    id: str
+    source_task_id: str
+    report_type: Literal["asset", "health", "diagnosis", "security", "generic"]
+    title: str
+    format: Literal["markdown", "csv", "json"]
+    path: str
+    summary: str = ""
+    generated_at: datetime

@@ -16,6 +16,7 @@ from .config import (
 )
 from .health import HealthCheckError, run_health_check
 from .models import TaskStatus
+from .reports import ReportError, generate_report
 from .storage import SQLiteStore, TaskRecordNotFound
 from .tasks import finish_task_run, get_task, list_tasks, new_task_run
 
@@ -30,10 +31,12 @@ app = typer.Typer(
 config_app = typer.Typer(help="配置管理。")
 asset_app = typer.Typer(help="资产发现。")
 health_app = typer.Typer(help="网络与服务巡检。")
+report_app = typer.Typer(help="报告输出。")
 task_app = typer.Typer(help="任务记录。")
 app.add_typer(config_app, name="config")
 app.add_typer(asset_app, name="asset")
 app.add_typer(health_app, name="health")
+app.add_typer(report_app, name="report")
 app.add_typer(task_app, name="task")
 
 
@@ -210,6 +213,54 @@ def health_check(
     console.print(f"[green]巡检完成：[/green]{task.id}")
     console.print(f"成功检查：{success_count}")
     console.print(f"总检查数：{len(results)}")
+
+
+@report_app.command("generate")
+def report_generate(
+    task_id: Annotated[
+        str,
+        typer.Option("--task", "-t", help="来源任务 ID。"),
+    ],
+    report_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="报告格式：markdown、csv、json。"),
+    ] = "markdown",
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """基于任务生成报告。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        report_task = new_task_run(task_type="report_generate")
+        store.save_task_run(report_task)
+        output_dir = loaded.reports.output_dir
+        if not output_dir.is_absolute():
+            output_dir = config.resolve().parent / output_dir
+        report = generate_report(
+            store=store,
+            source_task_id=task_id,
+            output_dir=output_dir.resolve(),
+            report_format=report_format,
+        )
+        report_task = finish_task_run(report_task, status=TaskStatus.success)
+        report_task = report_task.model_copy(
+            update={
+                "target_refs": [task_id],
+                "result_refs": [report.id],
+            }
+        )
+        store.save_task_run(report_task)
+    except (ConfigError, ReportError) as exc:
+        if "report_task" in locals():
+            failed_task = finish_task_run(report_task, status=TaskStatus.failed)
+            store.save_task_run(failed_task)
+        console.print(f"[red]报告生成失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]报告已生成：[/green]{report.path}")
+    console.print(f"报告 ID：{report.id}")
 
 
 @task_app.command("list")
