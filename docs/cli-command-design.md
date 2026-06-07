@@ -28,6 +28,8 @@ ops asset show
 
 ops health check
 
+ops diagnose internet
+
 ops task list
 ops task show
 
@@ -146,6 +148,34 @@ ops health check --profile daily_basic --config ./ops.yaml
 - 输出异常摘要。
 - 输出任务 ID。
 
+## diagnose 命令
+
+### ops diagnose internet
+
+用途：
+
+诊断本机基础互联网连通性。
+
+示例：
+
+```powershell
+ops diagnose internet --config ./ops.yaml
+```
+
+可覆盖默认目标：
+
+```powershell
+ops diagnose internet --external-ip 223.5.5.5 --dns-name www.baidu.com --http-url https://www.baidu.com
+```
+
+验收：
+
+- 能检查外部 IP 连通性。
+- 能检查 DNS 解析。
+- 能检查 HTTP/HTTPS 访问。
+- 能输出可能范围和下一步建议。
+- 能保存任务和探测结果。
+
 ## task 命令
 
 ### ops task list
@@ -232,4 +262,3 @@ ops health check
 ops task list
 ops report generate
 ```
-

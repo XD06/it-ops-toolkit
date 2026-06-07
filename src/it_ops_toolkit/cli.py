@@ -14,6 +14,12 @@ from .config import (
     create_default_config_file,
     load_config,
 )
+from .diagnosis import (
+    DEFAULT_DNS_NAME,
+    DEFAULT_EXTERNAL_IP,
+    DEFAULT_HTTP_URL,
+    run_internet_diagnosis,
+)
 from .health import HealthCheckError, run_health_check
 from .models import TaskStatus
 from .reports import ReportError, generate_report
@@ -31,11 +37,13 @@ app = typer.Typer(
 config_app = typer.Typer(help="配置管理。")
 asset_app = typer.Typer(help="资产发现。")
 health_app = typer.Typer(help="网络与服务巡检。")
+diagnose_app = typer.Typer(help="场景化故障诊断。")
 report_app = typer.Typer(help="报告输出。")
 task_app = typer.Typer(help="任务记录。")
 app.add_typer(config_app, name="config")
 app.add_typer(asset_app, name="asset")
 app.add_typer(health_app, name="health")
+app.add_typer(diagnose_app, name="diagnose")
 app.add_typer(report_app, name="report")
 app.add_typer(task_app, name="task")
 
@@ -246,6 +254,76 @@ def health_check(
     console.print(f"[green]巡检完成：[/green]{task.id}")
     console.print(f"成功检查：{success_count}")
     console.print(f"总检查数：{len(results)}")
+
+
+@diagnose_app.command("internet")
+def diagnose_internet(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+    external_ip: Annotated[
+        str,
+        typer.Option("--external-ip", help="用于测试外部 IP 连通性的地址。"),
+    ] = DEFAULT_EXTERNAL_IP,
+    dns_name: Annotated[
+        str,
+        typer.Option("--dns-name", help="用于测试 DNS 解析的域名。"),
+    ] = DEFAULT_DNS_NAME,
+    http_url: Annotated[
+        str,
+        typer.Option("--http-url", help="用于测试 HTTP/HTTPS 访问的 URL。"),
+    ] = DEFAULT_HTTP_URL,
+) -> None:
+    """诊断本机基础互联网连通性。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        task = new_task_run(task_type="diagnosis")
+        store.save_task_run(task)
+        results, summary = run_internet_diagnosis(
+            task=task,
+            store=store,
+            external_ip=external_ip,
+            dns_name=dns_name,
+            http_url=http_url,
+            timeout_ms=loaded.probe_defaults.timeout_ms,
+            retries=loaded.probe_defaults.retries,
+        )
+        task = finish_task_run(task, status=TaskStatus.success)
+        task = task.model_copy(
+            update={
+                "target_refs": [external_ip, dns_name, http_url],
+                "result_refs": [result.id for result in results],
+            }
+        )
+        store.save_task_run(task)
+    except ConfigError as exc:
+        if "task" in locals():
+            failed_task = finish_task_run(task, status=TaskStatus.failed)
+            store.save_task_run(failed_task)
+        console.print(f"[red]诊断失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    table = Table(title="互联网连通性诊断")
+    table.add_column("检查")
+    table.add_column("目标")
+    table.add_column("状态")
+    table.add_column("耗时 ms")
+    table.add_column("错误")
+    for result in results:
+        table.add_row(
+            result.probe_type,
+            result.target.value,
+            result.status.value,
+            str(result.duration_ms or ""),
+            result.error.message if result.error else "",
+        )
+
+    console.print(table)
+    console.print(f"[bold]结论：[/bold]{summary.title}")
+    console.print(f"[bold]可能范围：[/bold]{summary.likely_area}")
+    console.print(f"[bold]建议：[/bold]{summary.recommendation}")
+    console.print(f"[bold]任务 ID：[/bold]{task.id}")
 
 
 @report_app.command("generate")
