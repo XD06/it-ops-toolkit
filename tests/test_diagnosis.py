@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from it_ops_toolkit.diagnosis import (
     classify_internet_diagnosis,
     classify_intranet_diagnosis,
+    classify_rdp_diagnosis,
+    parse_host_port_target,
     parse_service_url,
 )
 from it_ops_toolkit.models import ProbeResult, ProbeStatus, Target
@@ -49,6 +51,33 @@ class DiagnosisTests(unittest.TestCase):
         summary = classify_intranet_diagnosis(results)
 
         self.assertEqual(summary.title, "目标主机可达，但业务端口不可达")
+
+    def test_parse_rdp_target_supports_host_port(self) -> None:
+        parsed = parse_host_port_target("pc-01.example.local:3390", default_port=3389)
+
+        self.assertEqual(parsed["host"], "pc-01.example.local")
+        self.assertEqual(parsed["port"], 3390)
+
+    def test_classifies_rdp_port_reachable_when_ping_fails(self) -> None:
+        results = [
+            _result("dns", "pc-01.example.local", ProbeStatus.success),
+            _result("ping", "pc-01.example.local", ProbeStatus.failed),
+            _result("tcp", "pc-01.example.local", ProbeStatus.success),
+        ]
+
+        summary = classify_rdp_diagnosis(results)
+
+        self.assertEqual(summary.title, "RDP 端口可达，但 Ping 不通")
+
+    def test_classifies_rdp_tcp_issue(self) -> None:
+        results = [
+            _result("ping", "192.168.1.50", ProbeStatus.success),
+            _result("tcp", "192.168.1.50", ProbeStatus.failed),
+        ]
+
+        summary = classify_rdp_diagnosis(results)
+
+        self.assertEqual(summary.title, "目标主机可达，但 RDP 端口不可达")
 
 
 def _result(probe_type: str, target: str, status: ProbeStatus) -> ProbeResult:

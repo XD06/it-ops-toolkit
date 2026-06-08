@@ -91,6 +91,7 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - `ops health check`。
 - `ops diagnose internet`。
 - `ops diagnose intranet`。
+- `ops diagnose rdp`，诊断远程桌面基础连接链路。
 - `ops collect local`，采集本机系统和网络排障上下文。
 - `ops task list`。
 - `ops task show`，包含任务下的探测结果。
@@ -114,6 +115,7 @@ python -m it_ops_toolkit asset show 192.168.1.10 --config .\ops.yaml
 python -m it_ops_toolkit health check --config .\ops.yaml --profile daily_basic
 python -m it_ops_toolkit diagnose internet --config .\ops.yaml
 python -m it_ops_toolkit diagnose intranet --config .\ops.yaml --url https://intranet.example.local
+python -m it_ops_toolkit diagnose rdp --config .\ops.yaml --target 192.168.1.50
 python -m it_ops_toolkit collect local --config .\ops.yaml
 python -m it_ops_toolkit task list --config .\ops.yaml
 python -m it_ops_toolkit task show <task-id> --config .\ops.yaml

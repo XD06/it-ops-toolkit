@@ -25,8 +25,10 @@ from .diagnosis import (
     DEFAULT_DNS_NAME,
     DEFAULT_EXTERNAL_IP,
     DEFAULT_HTTP_URL,
+    DEFAULT_RDP_PORT,
     run_intranet_diagnosis,
     run_internet_diagnosis,
+    run_rdp_diagnosis,
 )
 from .export import ExportError, default_bundle_path, export_bundle
 from .health import HealthCheckError, run_health_check
@@ -431,6 +433,71 @@ def diagnose_intranet(
         raise typer.Exit(code=1) from exc
 
     table = Table(title="内网系统访问诊断")
+    table.add_column("检查")
+    table.add_column("目标")
+    table.add_column("状态")
+    table.add_column("耗时 ms")
+    table.add_column("错误")
+    for result in results:
+        table.add_row(
+            result.probe_type,
+            result.target.value,
+            result.status.value,
+            str(result.duration_ms or ""),
+            result.error.message if result.error else "",
+        )
+
+    console.print(table)
+    console.print(f"[bold]结论：[/bold]{summary.title}")
+    console.print(f"[bold]可能范围：[/bold]{summary.likely_area}")
+    console.print(f"[bold]建议：[/bold]{summary.recommendation}")
+    console.print(f"[bold]任务 ID：[/bold]{task.id}")
+
+
+@diagnose_app.command("rdp")
+def diagnose_rdp(
+    target: Annotated[
+        str,
+        typer.Option("--target", "-t", help="远程桌面目标 IP、主机名或 host:port。"),
+    ],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+    port: Annotated[
+        int,
+        typer.Option("--port", "-p", min=1, max=65535, help="RDP TCP 端口。"),
+    ] = DEFAULT_RDP_PORT,
+) -> None:
+    """诊断远程桌面基础连接链路。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        task = new_task_run(task_type="diagnosis")
+        store.save_task_run(task)
+        results, summary = run_rdp_diagnosis(
+            task=task,
+            store=store,
+            target=target,
+            port=port,
+            timeout_ms=loaded.probe_defaults.timeout_ms,
+            retries=loaded.probe_defaults.retries,
+        )
+        task = finish_task_run(task, status=TaskStatus.success)
+        task = task.model_copy(
+            update={
+                "target_refs": [target],
+                "result_refs": [result.id for result in results],
+            }
+        )
+        store.save_task_run(task)
+    except (ConfigError, ValueError) as exc:
+        if "task" in locals():
+            failed_task = finish_task_run(task, status=TaskStatus.failed)
+            store.save_task_run(failed_task)
+        console.print(f"[red]诊断失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    table = Table(title="远程桌面连接诊断")
     table.add_column("检查")
     table.add_column("目标")
     table.add_column("状态")

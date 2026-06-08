@@ -12,6 +12,7 @@ from .storage import SQLiteStore
 DEFAULT_EXTERNAL_IP = "223.5.5.5"
 DEFAULT_DNS_NAME = "www.baidu.com"
 DEFAULT_HTTP_URL = "https://www.baidu.com"
+DEFAULT_RDP_PORT = 3389
 
 
 @dataclass(frozen=True)
@@ -177,6 +178,91 @@ def classify_intranet_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
     )
 
 
+def run_rdp_diagnosis(
+    *,
+    task: TaskRun,
+    store: SQLiteStore,
+    target: str,
+    port: int = DEFAULT_RDP_PORT,
+    timeout_ms: int = 1000,
+    retries: int = 1,
+) -> tuple[list[ProbeResult], DiagnosisSummary]:
+    parsed = parse_host_port_target(target, default_port=port)
+    host = parsed["host"]
+    target_port = parsed["port"]
+    results: list[ProbeResult] = []
+
+    if not _is_ip_address(host):
+        results.append(
+            resolve_hostname(
+                task_id=task.id,
+                hostname=host,
+                timeout_ms=timeout_ms,
+            )
+        )
+
+    results.extend(
+        [
+            ping_host(
+                task_id=task.id,
+                target=host,
+                timeout_ms=timeout_ms,
+                retries=retries,
+            ),
+            check_tcp_port(
+                task_id=task.id,
+                target=host,
+                port=target_port,
+                timeout_ms=timeout_ms,
+            ),
+        ]
+    )
+
+    for result in results:
+        store.save_probe_result(result)
+    return results, classify_rdp_diagnosis(results)
+
+
+def classify_rdp_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
+    dns_result = _first_result(results, "dns")
+    ping_result = _first_result(results, "ping")
+    tcp_result = _first_result(results, "tcp")
+
+    dns_ok = dns_result is None or _is_success(dns_result)
+    ping_ok = _is_success(ping_result)
+    tcp_ok = _is_success(tcp_result)
+
+    if not dns_ok:
+        return DiagnosisSummary(
+            title="远程桌面目标解析异常",
+            likely_area="DNS、主机名、搜索域或资产命名",
+            recommendation="先确认目标名称是否正确，再检查本机 DNS、内网 DNS 记录和搜索域配置。",
+        )
+    if tcp_ok and not ping_ok:
+        return DiagnosisSummary(
+            title="RDP 端口可达，但 Ping 不通",
+            likely_area="目标主机禁 ICMP、终端防火墙、网络设备阻断 Ping",
+            recommendation="RDP 基础端口已可达，继续检查账号权限、NLA、远程桌面服务策略和客户端错误信息。",
+        )
+    if not ping_ok and not tcp_ok:
+        return DiagnosisSummary(
+            title="目标主机或网络路径不可达",
+            likely_area="目标主机离线、路由、ACL、防火墙、跨网段策略",
+            recommendation="确认目标主机在线、电源和网卡状态正常，再检查网关路由、防火墙和网络隔离策略。",
+        )
+    if not tcp_ok:
+        return DiagnosisSummary(
+            title="目标主机可达，但 RDP 端口不可达",
+            likely_area="远程桌面服务未启用、防火墙阻断、端口变更、主机安全策略",
+            recommendation="检查目标主机是否启用远程桌面、TCP 端口、防火墙入站规则和安全基线策略。",
+        )
+    return DiagnosisSummary(
+        title="RDP 基础端口可达",
+        likely_area="网络路径和端口基础检查正常",
+        recommendation="如果仍无法登录，继续检查账号权限、NLA、远程桌面服务状态、授权、并发会话和客户端版本。",
+    )
+
+
 def parse_service_url(url: str) -> dict[str, object]:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -189,6 +275,29 @@ def parse_service_url(url: str) -> dict[str, object]:
         "host": parsed.hostname,
         "port": port,
     }
+
+
+def parse_host_port_target(target: str, *, default_port: int) -> dict[str, object]:
+    if default_port < 1 or default_port > 65535:
+        raise ValueError(f"invalid TCP port: {default_port}")
+
+    value = target.strip()
+    if not value:
+        raise ValueError("target is required")
+
+    if value.startswith("rdp://"):
+        parsed = urlparse(value)
+        if not parsed.hostname:
+            raise ValueError("RDP target must include a hostname")
+        port = parsed.port or default_port
+        return {"host": parsed.hostname, "port": _validate_port(port)}
+
+    if value.count(":") == 1:
+        host, raw_port = value.rsplit(":", 1)
+        if host and raw_port.isdigit():
+            return {"host": host, "port": _validate_port(int(raw_port))}
+
+    return {"host": value, "port": default_port}
 
 
 def _first_result(results: list[ProbeResult], probe_type: str) -> ProbeResult | None:
@@ -205,3 +314,9 @@ def _is_ip_address(value: str) -> bool:
     except ValueError:
         return False
     return True
+
+
+def _validate_port(port: int) -> int:
+    if port < 1 or port > 65535:
+        raise ValueError(f"invalid TCP port: {port}")
+    return port

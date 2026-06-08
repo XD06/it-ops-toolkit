@@ -31,6 +31,7 @@ ops health check
 
 ops diagnose internet
 ops diagnose intranet
+ops diagnose rdp
 
 ops collect local
 
@@ -243,6 +244,32 @@ ops diagnose intranet --url https://intranet.example.local --config ./ops.yaml
 - 能检查业务端口。
 - 能检查 HTTP/HTTPS 访问。
 - 能输出可能范围和下一步建议。
+- 能保存任务和探测结果。
+
+### ops diagnose rdp
+
+用途：
+
+诊断“远程桌面连不上”的基础链路问题。
+
+这个命令只做 DNS、Ping、TCP 端口检查，不尝试登录，不测试账号密码，不做爆破。
+
+示例：
+
+```powershell
+ops diagnose rdp --target 192.168.1.50 --config ./ops.yaml
+ops diagnose rdp --target pc-01.example.local --config ./ops.yaml
+ops diagnose rdp --target pc-01.example.local:3390 --config ./ops.yaml
+ops diagnose rdp --target pc-01.example.local --port 3390 --config ./ops.yaml
+```
+
+验收：
+
+- 目标是主机名时，先做 DNS 解析检查。
+- 执行 Ping 检查。
+- 执行 RDP TCP 端口检查，默认端口为 `3389`。
+- 支持通过 `--port` 或 `host:port` 指定非默认端口。
+- 能区分 DNS 异常、目标不可达、主机可达但 RDP 端口不可达、RDP 端口可达但 Ping 不通。
 - 能保存任务和探测结果。
 
 ## collect 命令
