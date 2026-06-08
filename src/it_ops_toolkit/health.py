@@ -4,7 +4,7 @@ from urllib.parse import urlparse
 
 from .config import HealthTarget, OpsConfig
 from .models import ProbeResult, TaskRun
-from .probes import check_http_url, ping_host, resolve_hostname
+from .probes import check_http_url, check_tcp_port, ping_host, resolve_hostname
 from .storage import SQLiteStore
 
 
@@ -65,7 +65,13 @@ def _run_target_check(
             timeout_ms=timeout_ms,
         )
     if check == "tcp":
-        raise HealthCheckError("TCP health checks require port support; not implemented yet")
+        host, port = _host_and_port_for_tcp(value, target.port)
+        return check_tcp_port(
+            task_id=task.id,
+            target=host,
+            port=port,
+            timeout_ms=timeout_ms,
+        )
     raise HealthCheckError(f"unsupported check type: {check}")
 
 
@@ -75,3 +81,20 @@ def _host_for_network_check(value: str) -> str:
         return parsed.hostname
     return value
 
+
+def _host_and_port_for_tcp(value: str, configured_port: int | None) -> tuple[str, int]:
+    parsed = urlparse(value)
+    if parsed.hostname:
+        port = configured_port or parsed.port
+        if port is None:
+            if parsed.scheme == "https":
+                port = 443
+            elif parsed.scheme == "http":
+                port = 80
+        if port is None:
+            raise HealthCheckError(f"TCP check requires port: {value}")
+        return parsed.hostname, port
+
+    if configured_port is None:
+        raise HealthCheckError(f"TCP check requires port: {value}")
+    return value, configured_port

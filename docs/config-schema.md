@@ -52,16 +52,21 @@ health_profiles:
         checks:
           - ping
       - name: 内部 DNS
-        type: ip
-        value: 192.168.1.2
+        type: hostname
+        value: www.baidu.com
         checks:
-          - ping
           - dns
       - name: 内网业务系统
         type: url
         value: https://intranet.example.local
         checks:
           - http
+      - name: 远程桌面服务
+        type: ip
+        value: 192.168.1.10
+        port: 3389
+        checks:
+          - tcp
 
 probe_defaults:
   timeout_ms: 1000
@@ -135,7 +140,7 @@ Probe 默认参数。
 - 网段格式是否合法。
 - 目标类型是否合法。
 - URL 是否合法。
-- 端口是否在 1-65535。
+- TCP 端口是否在 1-65535。
 - 超时是否为正数。
 - 输出目录是否可创建。
 - storage 类型是否支持。

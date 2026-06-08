@@ -35,6 +35,14 @@ class HealthTarget(BaseModel):
     type: Literal["ip", "hostname", "url", "service"]
     value: str | HttpUrl
     checks: list[Literal["ping", "dns", "tcp", "http"]]
+    port: int | None = None
+
+    @field_validator("port")
+    @classmethod
+    def validate_port(cls, port: int | None) -> int | None:
+        if port is not None and (port < 1 or port > 65535):
+            raise ValueError(f"invalid TCP port: {port}")
+        return port
 
 
 class HealthProfile(BaseModel):
@@ -115,10 +123,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
                     "checks": ["ping"],
                 },
                 {
-                    "name": "内部 DNS",
-                    "type": "ip",
-                    "value": "192.168.1.2",
-                    "checks": ["ping", "dns"],
+                    "name": "DNS 基础解析",
+                    "type": "hostname",
+                    "value": "www.baidu.com",
+                    "checks": ["dns"],
                 },
                 {
                     "name": "内网业务系统",
