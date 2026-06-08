@@ -84,6 +84,33 @@ class Asset(BaseModel):
     source: str = "asset_scan"
 
 
+class LocalInterface(BaseModel):
+    name: str
+    description: str | None = None
+    status: str | None = None
+    ipv4_addresses: list[str] = Field(default_factory=list)
+    ipv6_addresses: list[str] = Field(default_factory=list)
+    default_gateways: list[str] = Field(default_factory=list)
+    dns_servers: list[str] = Field(default_factory=list)
+
+
+class LocalSnapshot(BaseModel):
+    id: str
+    task_id: str
+    collected_at: datetime
+    hostname: str
+    fqdn: str | None = None
+    username: str | None = None
+    os_name: str
+    platform: str
+    interfaces: list[LocalInterface] = Field(default_factory=list)
+    default_routes: list[dict[str, Any]] = Field(default_factory=list)
+    dns_servers: list[str] = Field(default_factory=list)
+    proxy: dict[str, Any] = Field(default_factory=dict)
+    observations: dict[str, Any] = Field(default_factory=dict)
+    raw: dict[str, Any] = Field(default_factory=dict)
+
+
 class TaskRun(BaseModel):
     id: str
     task_type: Literal[
@@ -92,6 +119,7 @@ class TaskRun(BaseModel):
         "diagnosis",
         "security_check",
         "report_generate",
+        "ops_collect",
     ]
     requested_by: str = "local"
     source: Literal["cli", "web", "scheduler", "agent"] = "cli"
@@ -107,7 +135,7 @@ class TaskRun(BaseModel):
 class Report(BaseModel):
     id: str
     source_task_id: str
-    report_type: Literal["asset", "health", "diagnosis", "security", "generic"]
+    report_type: Literal["asset", "health", "diagnosis", "security", "ops", "generic"]
     title: str
     format: Literal["markdown", "csv", "json"]
     path: str

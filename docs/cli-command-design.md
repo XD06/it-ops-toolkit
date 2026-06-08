@@ -31,6 +31,8 @@ ops health check
 ops diagnose internet
 ops diagnose intranet
 
+ops collect local
+
 ops task list
 ops task show
 
@@ -200,6 +202,38 @@ ops diagnose intranet --url https://intranet.example.local --config ./ops.yaml
 - 能检查 HTTP/HTTPS 访问。
 - 能输出可能范围和下一步建议。
 - 能保存任务和探测结果。
+
+## collect 命令
+
+### ops collect local
+
+用途：
+
+采集本机系统与网络排障上下文，用于现场排障、交接和诊断包留档。
+
+第一阶段只做只读采集，不执行修复，不扫描网段。
+
+示例：
+
+```powershell
+ops collect local --config ./ops.yaml
+```
+
+当前采集内容：
+
+- 主机名、FQDN、当前用户、操作系统信息。
+- 网卡名称、状态、IPv4、IPv6、默认网关、DNS。
+- 默认路由摘要。
+- 代理环境变量、Windows Internet Settings、WinHTTP 代理摘要。
+
+验收：
+
+- 能保存 `ops_collect` 任务。
+- 能保存本机信息快照。
+- 能在 `ops task show` 中查看快照摘要。
+- 能通过 `ops report generate` 生成报告。
+- 能进入 `ops export bundle` 诊断包。
+- 代理 URL 中的用户名和密码必须脱敏。
 
 ## task 命令
 

@@ -6,7 +6,15 @@ from pathlib import Path
 
 from it_ops_toolkit.config import DEFAULT_CONFIG, OpsConfig
 from it_ops_toolkit.export import export_bundle
-from it_ops_toolkit.models import Asset, ProbeResult, ProbeStatus, Target, TaskStatus
+from it_ops_toolkit.models import (
+    Asset,
+    LocalInterface,
+    LocalSnapshot,
+    ProbeResult,
+    ProbeStatus,
+    Target,
+    TaskStatus,
+)
 from it_ops_toolkit.storage import SQLiteStore
 from it_ops_toolkit.tasks import finish_task_run, new_task_run
 
@@ -34,9 +42,21 @@ class ExportTests(unittest.TestCase):
                 first_seen=now,
                 last_seen=now,
             )
+            snapshot = LocalSnapshot(
+                id="local-1",
+                task_id=task.id,
+                collected_at=now,
+                hostname="pc-01",
+                os_name="Windows-11",
+                platform="Windows",
+                interfaces=[
+                    LocalInterface(name="Ethernet", ipv4_addresses=["127.0.0.1"])
+                ],
+            )
             store.save_task_run(task)
             store.save_probe_result(result)
             store.save_asset(asset)
+            store.save_local_snapshot(snapshot)
 
             bundle = export_bundle(
                 config=OpsConfig.model_validate(DEFAULT_CONFIG),
@@ -53,6 +73,7 @@ class ExportTests(unittest.TestCase):
             self.assertIn("tasks.json", names)
             self.assertIn("assets.json", names)
             self.assertIn("findings.json", names)
+            self.assertIn("local-snapshots.json", names)
             self.assertIn("probe-results.json", names)
 
 

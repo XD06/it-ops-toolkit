@@ -90,6 +90,7 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - `ops health check`。
 - `ops diagnose internet`。
 - `ops diagnose intranet`。
+- `ops collect local`，采集本机系统和网络排障上下文。
 - `ops task list`。
 - `ops task show`，包含任务下的探测结果。
 - `ops report generate`，支持 Markdown、CSV、JSON。
@@ -110,6 +111,7 @@ python -m it_ops_toolkit asset show 192.168.1.10 --config .\ops.yaml
 python -m it_ops_toolkit health check --config .\ops.yaml --profile daily_basic
 python -m it_ops_toolkit diagnose internet --config .\ops.yaml
 python -m it_ops_toolkit diagnose intranet --config .\ops.yaml --url https://intranet.example.local
+python -m it_ops_toolkit collect local --config .\ops.yaml
 python -m it_ops_toolkit task list --config .\ops.yaml
 python -m it_ops_toolkit task show <task-id> --config .\ops.yaml
 python -m it_ops_toolkit report generate --config .\ops.yaml --task <task-id> --format markdown

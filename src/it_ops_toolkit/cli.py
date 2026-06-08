@@ -14,6 +14,7 @@ from .config import (
     create_default_config_file,
     load_config,
 )
+from .local_collect import collect_local_snapshot
 from .diagnosis import (
     DEFAULT_DNS_NAME,
     DEFAULT_EXTERNAL_IP,
@@ -41,6 +42,7 @@ config_app = typer.Typer(help="配置管理。")
 asset_app = typer.Typer(help="资产发现。")
 health_app = typer.Typer(help="网络与服务巡检。")
 diagnose_app = typer.Typer(help="场景化故障诊断。")
+collect_app = typer.Typer(help="本机运维信息采集。")
 export_app = typer.Typer(help="诊断包导出。")
 report_app = typer.Typer(help="报告输出。")
 security_app = typer.Typer(help="轻量安全检查。")
@@ -49,6 +51,7 @@ app.add_typer(config_app, name="config")
 app.add_typer(asset_app, name="asset")
 app.add_typer(health_app, name="health")
 app.add_typer(diagnose_app, name="diagnose")
+app.add_typer(collect_app, name="collect")
 app.add_typer(export_app, name="export")
 app.add_typer(report_app, name="report")
 app.add_typer(security_app, name="security")
@@ -393,6 +396,61 @@ def diagnose_intranet(
     console.print(f"[bold]任务 ID：[/bold]{task.id}")
 
 
+@collect_app.command("local")
+def collect_local(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """采集本机系统与网络排障上下文。"""
+    try:
+        _, store = _load_config_and_store(config)
+        task = new_task_run(task_type="ops_collect")
+        store.save_task_run(task)
+        snapshot = collect_local_snapshot(task=task, store=store)
+        task = finish_task_run(task, status=TaskStatus.success)
+        task = task.model_copy(
+            update={
+                "target_refs": [snapshot.hostname],
+                "result_refs": [snapshot.id],
+            }
+        )
+        store.save_task_run(task)
+    except ConfigError as exc:
+        if "task" in locals():
+            failed_task = finish_task_run(task, status=TaskStatus.failed)
+            store.save_task_run(failed_task)
+        console.print(f"[red]本机信息采集失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    table = Table(title="本机运维信息")
+    table.add_column("项目")
+    table.add_column("值")
+    table.add_row("主机名", snapshot.hostname)
+    table.add_row("FQDN", snapshot.fqdn or "")
+    table.add_row("系统", snapshot.os_name)
+    table.add_row("网卡数量", str(len(snapshot.interfaces)))
+    table.add_row("默认路由", str(len(snapshot.default_routes)))
+    table.add_row("DNS", ", ".join(snapshot.dns_servers))
+    table.add_row("任务 ID", task.id)
+    console.print(table)
+
+    interface_table = Table(title="网卡摘要")
+    interface_table.add_column("名称")
+    interface_table.add_column("状态")
+    interface_table.add_column("IPv4")
+    interface_table.add_column("网关")
+    for interface in snapshot.interfaces:
+        interface_table.add_row(
+            interface.name,
+            interface.status or "",
+            ", ".join(interface.ipv4_addresses),
+            ", ".join(interface.default_gateways),
+        )
+    console.print(interface_table)
+
+
 @report_app.command("generate")
 def report_generate(
     task_id: Annotated[
@@ -591,6 +649,24 @@ def task_show(
     console.print(f"[bold]目标引用：[/bold]{task.target_refs}")
     console.print(f"[bold]结果引用：[/bold]{task.result_refs}")
     console.print(f"[bold]日志引用：[/bold]{task.log_refs}")
+
+    snapshots = store.list_local_snapshots_for_task(task.id)
+    if snapshots:
+        snapshot_table = Table(title="本机信息快照")
+        snapshot_table.add_column("ID")
+        snapshot_table.add_column("主机名")
+        snapshot_table.add_column("系统")
+        snapshot_table.add_column("网卡数")
+        snapshot_table.add_column("采集时间")
+        for snapshot in snapshots:
+            snapshot_table.add_row(
+                snapshot.id,
+                snapshot.hostname,
+                snapshot.os_name,
+                str(len(snapshot.interfaces)),
+                snapshot.collected_at.isoformat(),
+            )
+        console.print(snapshot_table)
 
     results = store.list_probe_results_for_task(task.id)
     if not results:

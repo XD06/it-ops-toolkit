@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .models import Asset, Finding, ProbeResult, Report, TaskRun
+from .models import Asset, Finding, LocalSnapshot, ProbeResult, Report, TaskRun
 from .storage import SQLiteStore, TaskRecordNotFound
 
 
@@ -35,18 +35,19 @@ def generate_report(
     path = output_dir / f"{report_id}.{_extension_for_format(report_format)}"
     probe_results = store.list_probe_results_for_task(source_task.id)
     findings = store.list_findings_for_task(source_task.id)
+    local_snapshots = store.list_local_snapshots_for_task(source_task.id)
     assets = _assets_for_task(store, source_task)
 
     if report_format == "markdown":
         path.write_text(
-            _render_markdown(source_task, probe_results, assets, findings),
+            _render_markdown(source_task, probe_results, assets, findings, local_snapshots),
             encoding="utf-8",
         )
     elif report_format == "csv":
-        _write_csv(path, probe_results, assets, findings)
+        _write_csv(path, probe_results, assets, findings, local_snapshots)
     elif report_format == "json":
         path.write_text(
-            _render_json(source_task, probe_results, assets, findings),
+            _render_json(source_task, probe_results, assets, findings, local_snapshots),
             encoding="utf-8",
         )
 
@@ -59,7 +60,9 @@ def generate_report(
         path=str(path),
         summary=(
             f"{source_task.task_type}: "
-            f"{len(probe_results)} probe results, {len(findings)} findings"
+            f"{len(probe_results)} probe results, "
+            f"{len(findings)} findings, "
+            f"{len(local_snapshots)} local snapshots"
         ),
         generated_at=datetime.now(UTC),
     )
@@ -74,6 +77,8 @@ def _report_type_for_task(task: TaskRun) -> str:
         return "health"
     if task.task_type == "security_check":
         return "security"
+    if task.task_type == "ops_collect":
+        return "ops"
     return "generic"
 
 
@@ -97,6 +102,7 @@ def _render_markdown(
     probe_results: list[ProbeResult],
     assets: list[Asset],
     findings: list[Finding],
+    local_snapshots: list[LocalSnapshot],
 ) -> str:
     lines = [
         f"# {task.task_type} 报告",
@@ -111,6 +117,57 @@ def _render_markdown(
         f"- 结束时间：`{task.ended_at.isoformat() if task.ended_at else ''}`",
         "",
     ]
+
+    if local_snapshots:
+        lines.extend(
+            [
+                "## 本机信息",
+                "",
+                "| 主机名 | 系统 | 网卡数 | 默认路由数 | DNS | 采集时间 |",
+                "|---|---|---:|---:|---|---|",
+            ]
+        )
+        for snapshot in local_snapshots:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        snapshot.hostname,
+                        snapshot.os_name,
+                        str(len(snapshot.interfaces)),
+                        str(len(snapshot.default_routes)),
+                        ",".join(snapshot.dns_servers),
+                        snapshot.collected_at.isoformat(),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+
+        lines.extend(
+            [
+                "## 网卡摘要",
+                "",
+                "| 名称 | 状态 | IPv4 | 网关 | DNS |",
+                "|---|---|---|---|---|",
+            ]
+        )
+        for snapshot in local_snapshots:
+            for interface in snapshot.interfaces:
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            interface.name,
+                            interface.status or "",
+                            ",".join(interface.ipv4_addresses),
+                            ",".join(interface.default_gateways),
+                            ",".join(interface.dns_servers),
+                        ]
+                    )
+                    + " |"
+                )
+        lines.append("")
 
     if assets:
         lines.extend(
@@ -193,9 +250,55 @@ def _write_csv(
     probe_results: list[ProbeResult],
     assets: list[Asset],
     findings: list[Finding],
+    local_snapshots: list[LocalSnapshot],
 ) -> None:
     with path.open("w", newline="", encoding="utf-8-sig") as file:
         writer = csv.writer(file)
+        if local_snapshots:
+            writer.writerow(
+                [
+                    "snapshot_id",
+                    "hostname",
+                    "os_name",
+                    "interface_name",
+                    "status",
+                    "ipv4_addresses",
+                    "default_gateways",
+                    "dns_servers",
+                    "collected_at",
+                ]
+            )
+            for snapshot in local_snapshots:
+                if not snapshot.interfaces:
+                    writer.writerow(
+                        [
+                            snapshot.id,
+                            snapshot.hostname,
+                            snapshot.os_name,
+                            "",
+                            "",
+                            "",
+                            "",
+                            ",".join(snapshot.dns_servers),
+                            snapshot.collected_at.isoformat(),
+                        ]
+                    )
+                for interface in snapshot.interfaces:
+                    writer.writerow(
+                        [
+                            snapshot.id,
+                            snapshot.hostname,
+                            snapshot.os_name,
+                            interface.name,
+                            interface.status or "",
+                            ",".join(interface.ipv4_addresses),
+                            ",".join(interface.default_gateways),
+                            ",".join(interface.dns_servers),
+                            snapshot.collected_at.isoformat(),
+                        ]
+                    )
+            return
+
         if assets:
             writer.writerow(["ip", "hostname", "status", "open_ports", "last_seen"])
             for asset in assets:
@@ -242,11 +345,15 @@ def _render_json(
     probe_results: list[ProbeResult],
     assets: list[Asset],
     findings: list[Finding],
+    local_snapshots: list[LocalSnapshot],
 ) -> str:
     payload = {
         "task": task.model_dump(mode="json"),
         "assets": [asset.model_dump(mode="json") for asset in assets],
         "findings": [finding.model_dump(mode="json") for finding in findings],
+        "local_snapshots": [
+            snapshot.model_dump(mode="json") for snapshot in local_snapshots
+        ],
         "probe_results": [result.model_dump(mode="json") for result in probe_results],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)

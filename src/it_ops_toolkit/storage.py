@@ -11,6 +11,8 @@ from .models import (
     Asset,
     ErrorInfo,
     Finding,
+    LocalInterface,
+    LocalSnapshot,
     ProbeResult,
     ProbeStatus,
     Report,
@@ -56,6 +58,26 @@ CREATE TABLE IF NOT EXISTS assets (
 
 CREATE INDEX IF NOT EXISTS idx_assets_ip
 ON assets(ip);
+
+CREATE TABLE IF NOT EXISTS local_snapshots (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    collected_at TEXT NOT NULL,
+    hostname TEXT NOT NULL,
+    fqdn TEXT,
+    username TEXT,
+    os_name TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    interfaces TEXT NOT NULL,
+    default_routes TEXT NOT NULL,
+    dns_servers TEXT NOT NULL,
+    proxy TEXT NOT NULL,
+    observations TEXT NOT NULL,
+    raw TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_local_snapshots_task_id
+ON local_snapshots(task_id);
 
 CREATE TABLE IF NOT EXISTS probe_results (
     id TEXT NOT NULL,
@@ -247,6 +269,73 @@ class SQLiteStore:
             ).fetchone()
         return self._row_to_asset(row) if row else None
 
+    def save_local_snapshot(self, snapshot: LocalSnapshot) -> None:
+        self.ensure_schema()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO local_snapshots (
+                    id,
+                    task_id,
+                    collected_at,
+                    hostname,
+                    fqdn,
+                    username,
+                    os_name,
+                    platform,
+                    interfaces,
+                    default_routes,
+                    dns_servers,
+                    proxy,
+                    observations,
+                    raw
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    snapshot.id,
+                    snapshot.task_id,
+                    snapshot.collected_at.isoformat(),
+                    snapshot.hostname,
+                    snapshot.fqdn,
+                    snapshot.username,
+                    snapshot.os_name,
+                    snapshot.platform,
+                    json.dumps(
+                        [interface.model_dump(mode="json") for interface in snapshot.interfaces],
+                        ensure_ascii=False,
+                    ),
+                    json.dumps(snapshot.default_routes, ensure_ascii=False),
+                    json.dumps(snapshot.dns_servers, ensure_ascii=False),
+                    json.dumps(snapshot.proxy, ensure_ascii=False),
+                    json.dumps(snapshot.observations, ensure_ascii=False),
+                    json.dumps(snapshot.raw, ensure_ascii=False),
+                ),
+            )
+
+    def list_local_snapshots_for_task(self, task_id: str) -> list[LocalSnapshot]:
+        self.ensure_schema()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM local_snapshots
+                WHERE task_id = ?
+                ORDER BY collected_at ASC
+                """,
+                (task_id,),
+            ).fetchall()
+        return [self._row_to_local_snapshot(row) for row in rows]
+
+    def list_all_local_snapshots(self) -> list[LocalSnapshot]:
+        self.ensure_schema()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM local_snapshots
+                ORDER BY collected_at ASC
+                """
+            ).fetchall()
+        return [self._row_to_local_snapshot(row) for row in rows]
+
     def save_probe_result(self, result: ProbeResult) -> None:
         self.ensure_schema()
         with self.connect() as connection:
@@ -420,6 +509,28 @@ class SQLiteStore:
             last_seen=values["last_seen"],
             status=values["status"],
             source=values["source"],
+        )
+
+    def _row_to_local_snapshot(self, row: sqlite3.Row) -> LocalSnapshot:
+        values: dict[str, Any] = dict(row)
+        return LocalSnapshot(
+            id=values["id"],
+            task_id=values["task_id"],
+            collected_at=values["collected_at"],
+            hostname=values["hostname"],
+            fqdn=values["fqdn"],
+            username=values["username"],
+            os_name=values["os_name"],
+            platform=values["platform"],
+            interfaces=[
+                LocalInterface.model_validate(interface)
+                for interface in json.loads(values["interfaces"])
+            ],
+            default_routes=json.loads(values["default_routes"]),
+            dns_servers=json.loads(values["dns_servers"]),
+            proxy=json.loads(values["proxy"]),
+            observations=json.loads(values["observations"]),
+            raw=json.loads(values["raw"]),
         )
 
     def _row_to_probe_result(self, row: sqlite3.Row) -> ProbeResult:

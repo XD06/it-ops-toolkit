@@ -3,7 +3,15 @@ import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 
-from it_ops_toolkit.models import Asset, ProbeResult, ProbeStatus, Target, TaskStatus
+from it_ops_toolkit.models import (
+    Asset,
+    LocalInterface,
+    LocalSnapshot,
+    ProbeResult,
+    ProbeStatus,
+    Target,
+    TaskStatus,
+)
 from it_ops_toolkit.storage import SQLiteStore, TaskRecordNotFound
 from it_ops_toolkit.tasks import new_task_run
 
@@ -72,6 +80,38 @@ class StorageTests(unittest.TestCase):
             self.assertEqual(len(results), 1)
             self.assertEqual(results[0].status, ProbeStatus.success)
             self.assertEqual(results[0].observations["reachable"], True)
+
+    def test_save_local_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = SQLiteStore(Path(tmp) / "ops.sqlite")
+            task = new_task_run(task_type="ops_collect")
+            now = datetime.now(UTC)
+            snapshot = LocalSnapshot(
+                id="local-1",
+                task_id=task.id,
+                collected_at=now,
+                hostname="pc-01",
+                os_name="Windows-11",
+                platform="Windows",
+                interfaces=[
+                    LocalInterface(
+                        name="Ethernet",
+                        status="Up",
+                        ipv4_addresses=["192.168.1.20"],
+                        default_gateways=["192.168.1.1"],
+                        dns_servers=["192.168.1.1"],
+                    )
+                ],
+                default_routes=[{"next_hop": "192.168.1.1"}],
+                dns_servers=["192.168.1.1"],
+            )
+
+            store.save_local_snapshot(snapshot)
+            loaded = store.list_local_snapshots_for_task(task.id)
+
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].hostname, "pc-01")
+            self.assertEqual(loaded[0].interfaces[0].name, "Ethernet")
 
 
 if __name__ == "__main__":

@@ -27,6 +27,7 @@ def export_bundle(
     task_ids = {task.id for task in tasks}
     probe_results = _probe_results_for_bundle(store, task_ids=task_ids)
     findings = _findings_for_bundle(store, task_ids=task_ids)
+    local_snapshots = _local_snapshots_for_bundle(store, task_ids=task_ids)
     assets = store.list_assets()
 
     with TemporaryDirectory() as tmp:
@@ -41,8 +42,18 @@ def export_bundle(
             [result.model_dump(mode="json") for result in probe_results],
         )
         _write_json(root / "findings.json", [finding.model_dump(mode="json") for finding in findings])
+        _write_json(
+            root / "local-snapshots.json",
+            [snapshot.model_dump(mode="json") for snapshot in local_snapshots],
+        )
         (root / "summary.md").write_text(
-            _render_summary(tasks=tasks, assets=assets, probe_results=probe_results, findings=findings),
+            _render_summary(
+                tasks=tasks,
+                assets=assets,
+                probe_results=probe_results,
+                findings=findings,
+                local_snapshots=local_snapshots,
+            ),
             encoding="utf-8",
         )
 
@@ -83,6 +94,15 @@ def _findings_for_bundle(store: SQLiteStore, *, task_ids: set[str]):
     return findings
 
 
+def _local_snapshots_for_bundle(store: SQLiteStore, *, task_ids: set[str]):
+    if not task_ids:
+        return []
+    snapshots = []
+    for task_id in task_ids:
+        snapshots.extend(store.list_local_snapshots_for_task(task_id))
+    return snapshots
+
+
 def _config_summary(config: OpsConfig) -> dict[str, object]:
     return {
         "app": config.app.model_dump(mode="json"),
@@ -104,6 +124,7 @@ def _render_summary(
     assets: list[Asset],
     probe_results: list[ProbeResult],
     findings: list,
+    local_snapshots: list,
 ) -> str:
     success_count = sum(1 for result in probe_results if result.status == "success")
     failed_count = len(probe_results) - success_count
@@ -116,6 +137,7 @@ def _render_summary(
             f"- 资产数量：{len(assets)}",
             f"- 探测结果数量：{len(probe_results)}",
             f"- 风险发现数量：{len(findings)}",
+            f"- 本机信息快照数量：{len(local_snapshots)}",
             f"- 成功探测：{success_count}",
             f"- 异常或超时探测：{failed_count}",
             "",
@@ -126,6 +148,7 @@ def _render_summary(
             "- `assets.json`：资产记录。",
             "- `probe-results.json`：探测结果。",
             "- `findings.json`：风险发现。",
+            "- `local-snapshots.json`：本机系统与网络采集快照。",
         ]
     )
 
