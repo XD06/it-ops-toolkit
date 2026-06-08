@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import csv
+import json
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from ipaddress import ip_network
+from pathlib import Path
 
 from .config import OpsConfig, ScanProfile
 from .models import Asset, ProbeResult, ProbeStatus, TaskRun
@@ -14,6 +17,10 @@ MAX_SCAN_HOSTS = 1024
 
 
 class AssetScanError(RuntimeError):
+    pass
+
+
+class AssetExportError(RuntimeError):
     pass
 
 
@@ -75,6 +82,40 @@ def run_asset_scan(
         store.save_asset(asset)
 
     return assets, results
+
+
+def export_assets(
+    *,
+    store: SQLiteStore,
+    output_path: Path,
+    export_format: str = "csv",
+) -> Path:
+    export_format = export_format.lower()
+    if export_format not in {"csv", "json"}:
+        raise AssetExportError(f"unsupported asset export format: {export_format}")
+
+    assets = store.list_assets()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if export_format == "csv":
+        _write_assets_csv(output_path, assets)
+    elif export_format == "json":
+        output_path.write_text(
+            json.dumps(
+                [asset.model_dump(mode="json") for asset in assets],
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    return output_path
+
+
+def default_asset_export_path(base_dir: Path, export_format: str) -> Path:
+    export_format = export_format.lower()
+    if export_format not in {"csv", "json"}:
+        raise AssetExportError(f"unsupported asset export format: {export_format}")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    return base_dir / f"assets-{stamp}.{export_format}"
 
 
 def expand_scan_hosts(profile: ScanProfile) -> list[str]:
@@ -143,6 +184,42 @@ def _run_tcp_checks(
             for host, port in jobs
         ]
         return [future.result() for future in as_completed(futures)]
+
+
+def _write_assets_csv(path: Path, assets: list[Asset]) -> None:
+    with path.open("w", newline="", encoding="utf-8-sig") as file:
+        writer = csv.writer(file)
+        writer.writerow(
+            [
+                "ip",
+                "hostname",
+                "mac",
+                "vendor",
+                "os_hint",
+                "asset_type",
+                "open_ports",
+                "status",
+                "first_seen",
+                "last_seen",
+                "source",
+            ]
+        )
+        for asset in assets:
+            writer.writerow(
+                [
+                    asset.ip,
+                    asset.hostname or "",
+                    asset.mac or "",
+                    asset.vendor or "",
+                    asset.os_hint or "",
+                    asset.asset_type or "",
+                    ",".join(str(port) for port in asset.open_ports),
+                    asset.status,
+                    asset.first_seen.isoformat(),
+                    asset.last_seen.isoformat(),
+                    asset.source,
+                ]
+            )
 
 
 def _safe_reverse_dns(host: str) -> str | None:

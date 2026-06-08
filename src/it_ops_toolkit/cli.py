@@ -6,7 +6,13 @@ from rich.console import Console
 from rich.table import Table
 
 from . import __version__
-from .assets import AssetScanError, run_asset_scan
+from .assets import (
+    AssetExportError,
+    AssetScanError,
+    default_asset_export_path,
+    export_assets,
+    run_asset_scan,
+)
 from .config import (
     DEFAULT_CONFIG_PATH,
     ConfigError,
@@ -197,6 +203,47 @@ def asset_list(
         )
 
     console.print(table)
+
+
+@asset_app.command("export")
+def asset_export(
+    export_format: Annotated[
+        str,
+        typer.Option("--format", "-f", help="导出格式：csv、json。"),
+    ] = "csv",
+    output: Annotated[
+        Path | None,
+        typer.Option("--output", "-o", help="输出文件路径。"),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """导出当前资产清单。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        output_path = output
+        if output_path is None:
+            output_dir = loaded.reports.output_dir
+            if not output_dir.is_absolute():
+                output_dir = config.resolve().parent / output_dir
+            output_path = default_asset_export_path(output_dir.resolve(), export_format)
+        elif not output_path.is_absolute():
+            output_path = config.resolve().parent / output_path
+
+        asset_count = len(store.list_assets())
+        exported = export_assets(
+            store=store,
+            output_path=output_path.resolve(),
+            export_format=export_format,
+        )
+    except (ConfigError, AssetExportError) as exc:
+        console.print(f"[red]资产导出失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]资产清单已导出：[/green]{exported}")
+    console.print(f"资产数量：{asset_count}")
 
 
 @asset_app.command("show")

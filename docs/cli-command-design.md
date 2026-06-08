@@ -25,6 +25,7 @@ ops config validate
 ops asset scan
 ops asset list
 ops asset show
+ops asset export
 
 ops health check
 
@@ -144,6 +145,33 @@ ops asset show 192.168.1.10
 验收：
 
 - 能显示资产详情和最近探测结果。
+
+### ops asset export
+
+用途：
+
+导出当前资产库中的资产清单，用于资产盘点、Excel/WPS 查看、交接或发给同事复核。
+
+示例：
+
+```powershell
+ops asset export --config ./ops.yaml --format csv
+ops asset export --config ./ops.yaml --format json --output ./reports/assets.json
+```
+
+说明：
+
+- 默认导出 CSV，输出到配置中的 `reports.output_dir`。
+- CSV 使用 `utf-8-sig`，优先保证 Windows 上 Excel 打开不乱码。
+- JSON 使用结构化资产模型输出，便于后续 API、Web 或 AI 处理。
+- 该命令导出当前资产库，不依赖某一次扫描任务；如果需要某次任务报告，使用 `ops report generate`。
+
+验收：
+
+- 支持 `csv` 和 `json`。
+- 支持显式指定输出路径。
+- 空资产库也能生成带表头的 CSV。
+- 不支持的格式必须给出明确错误。
 
 ## health 命令
 

@@ -87,6 +87,7 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - `ops asset scan`。
 - `ops asset list`。
 - `ops asset show`。
+- `ops asset export`，导出当前资产清单，支持 CSV 和 JSON。
 - `ops health check`。
 - `ops diagnose internet`。
 - `ops diagnose intranet`。
@@ -108,6 +109,7 @@ python -m it_ops_toolkit config validate --config .\ops.yaml
 python -m it_ops_toolkit asset scan --config .\ops.yaml --profile office_lan
 python -m it_ops_toolkit asset scan --config .\ops.yaml --profile office_lan --tcp-without-ping
 python -m it_ops_toolkit asset list --config .\ops.yaml
+python -m it_ops_toolkit asset export --config .\ops.yaml --format csv
 python -m it_ops_toolkit asset show 192.168.1.10 --config .\ops.yaml
 python -m it_ops_toolkit health check --config .\ops.yaml --profile daily_basic
 python -m it_ops_toolkit diagnose internet --config .\ops.yaml

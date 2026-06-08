@@ -1,12 +1,19 @@
+import json
 import unittest
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from it_ops_toolkit.assets import AssetScanError, expand_scan_hosts, run_asset_scan
+from it_ops_toolkit.assets import (
+    AssetExportError,
+    AssetScanError,
+    export_assets,
+    expand_scan_hosts,
+    run_asset_scan,
+)
 from it_ops_toolkit.config import DEFAULT_CONFIG, OpsConfig, ScanProfile
-from it_ops_toolkit.models import ProbeResult, ProbeStatus, Target
+from it_ops_toolkit.models import Asset, ProbeResult, ProbeStatus, Target
 from it_ops_toolkit.storage import SQLiteStore
 from it_ops_toolkit.tasks import new_task_run
 
@@ -150,6 +157,51 @@ class AssetScanTests(unittest.TestCase):
 
             self.assertEqual(assets, [])
             self.assertEqual(len(results), 2)
+
+    def test_export_assets_csv_and_json(self) -> None:
+        with TemporaryDirectory() as tmp:
+            store = SQLiteStore(Path(tmp) / "ops.sqlite")
+            now = datetime.now(UTC)
+            store.save_asset(
+                Asset(
+                    id="asset-192-168-1-20",
+                    ip="192.168.1.20",
+                    hostname="pc-20",
+                    open_ports=[445, 3389],
+                    first_seen=now,
+                    last_seen=now,
+                    source="test",
+                )
+            )
+
+            csv_path = export_assets(
+                store=store,
+                output_path=Path(tmp) / "assets.csv",
+                export_format="csv",
+            )
+            json_path = export_assets(
+                store=store,
+                output_path=Path(tmp) / "assets.json",
+                export_format="JSON",
+            )
+
+            csv_text = csv_path.read_text(encoding="utf-8-sig")
+            json_payload = json.loads(json_path.read_text(encoding="utf-8"))
+
+            self.assertIn("ip,hostname", csv_text)
+            self.assertIn("192.168.1.20", csv_text)
+            self.assertEqual(json_payload[0]["ip"], "192.168.1.20")
+
+    def test_export_assets_rejects_unsupported_format(self) -> None:
+        with TemporaryDirectory() as tmp:
+            store = SQLiteStore(Path(tmp) / "ops.sqlite")
+
+            with self.assertRaises(AssetExportError):
+                export_assets(
+                    store=store,
+                    output_path=Path(tmp) / "assets.xlsx",
+                    export_format="xlsx",
+                )
 
 
 if __name__ == "__main__":
