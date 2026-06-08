@@ -23,6 +23,7 @@ def run_asset_scan(
     profile_name: str,
     task: TaskRun,
     store: SQLiteStore,
+    tcp_without_ping: bool = False,
 ) -> tuple[list[Asset], list[ProbeResult]]:
     profile = _get_scan_profile(config, profile_name)
     hosts = expand_scan_hosts(profile)
@@ -37,7 +38,8 @@ def run_asset_scan(
         for result in ping_results
         if result.status == ProbeStatus.success and result.observations.get("reachable")
     ]
-    tcp_results = _run_tcp_checks(config, profile, task, active_hosts)
+    tcp_hosts = hosts if tcp_without_ping else active_hosts
+    tcp_results = _run_tcp_checks(config, profile, task, tcp_hosts)
     results = [*ping_results, *tcp_results]
 
     open_ports_by_host: dict[str, list[int]] = {host: [] for host in active_hosts}
@@ -46,6 +48,11 @@ def run_asset_scan(
             port = result.observations.get("port")
             if isinstance(port, int):
                 open_ports_by_host.setdefault(result.target.value, []).append(port)
+
+    active_host_set = set(active_hosts)
+    asset_hosts = [
+        host for host in hosts if host in active_host_set or host in open_ports_by_host
+    ]
 
     now = datetime.now(UTC)
     assets = [
@@ -59,7 +66,7 @@ def run_asset_scan(
             status="active",
             source=f"scan_profile:{profile_name}",
         )
-        for host in active_hosts
+        for host in asset_hosts
     ]
 
     for result in results:
@@ -143,4 +150,3 @@ def _safe_reverse_dns(host: str) -> str | None:
         return socket.gethostbyaddr(host)[0]
     except OSError:
         return None
-

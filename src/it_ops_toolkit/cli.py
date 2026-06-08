@@ -124,6 +124,13 @@ def asset_scan(
         Path,
         typer.Option("--config", "-c", help="配置文件路径。"),
     ] = DEFAULT_CONFIG_PATH,
+    tcp_without_ping: Annotated[
+        bool,
+        typer.Option(
+            "--tcp-without-ping",
+            help="即使 Ping 不通也尝试配置的 TCP 端口，可能明显增加耗时。",
+        ),
+    ] = False,
 ) -> None:
     """执行基础资产发现。"""
     try:
@@ -135,6 +142,7 @@ def asset_scan(
             profile_name=profile,
             task=task,
             store=store,
+            tcp_without_ping=tcp_without_ping,
         )
         task = finish_task_run(task, status=TaskStatus.success)
         task = task.model_copy(
@@ -154,6 +162,7 @@ def asset_scan(
     console.print(f"[green]资产扫描完成：[/green]{task.id}")
     console.print(f"发现在线资产：{len(assets)}")
     console.print(f"探测结果数量：{len(results)}")
+    console.print(f"Ping 不通仍扫 TCP：{'是' if tcp_without_ping else '否'}")
 
 
 @asset_app.command("list")

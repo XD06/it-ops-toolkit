@@ -106,6 +106,7 @@ python -m it_ops_toolkit --version
 python -m it_ops_toolkit config init --path .\ops.yaml
 python -m it_ops_toolkit config validate --config .\ops.yaml
 python -m it_ops_toolkit asset scan --config .\ops.yaml --profile office_lan
+python -m it_ops_toolkit asset scan --config .\ops.yaml --profile office_lan --tcp-without-ping
 python -m it_ops_toolkit asset list --config .\ops.yaml
 python -m it_ops_toolkit asset show 192.168.1.10 --config .\ops.yaml
 python -m it_ops_toolkit health check --config .\ops.yaml --profile daily_basic

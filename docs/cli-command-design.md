@@ -91,6 +91,19 @@ ops config validate --config ./ops.yaml
 ops asset scan --profile office_lan --config ./ops.yaml
 ```
 
+当目标环境禁止 ICMP，但仍希望发现开放业务端口的主机时，可以显式启用 TCP 不依赖 Ping 的模式：
+
+```powershell
+ops asset scan --profile office_lan --config ./ops.yaml --tcp-without-ping
+```
+
+说明：
+
+- 默认模式只对 Ping 成功的主机执行 TCP 端口探测。
+- `--tcp-without-ping` 会对网段内全部主机尝试配置的 TCP 端口。
+- 这个模式更容易发现禁 Ping 但端口开放的 Windows 主机、服务器或网络设备。
+- 代价是耗时会按“主机数 × 端口数”增长，较大网段需要谨慎使用。
+
 验收：
 
 - 读取 scan profile。
@@ -98,6 +111,7 @@ ops asset scan --profile office_lan --config ./ops.yaml
 - 执行配置端口探测。
 - 保存资产结果。
 - 输出任务 ID。
+- 启用 `--tcp-without-ping` 时，Ping 失败但 TCP 端口开放的主机也应保存为资产。
 
 ### ops asset list
 
