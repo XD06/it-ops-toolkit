@@ -86,7 +86,13 @@ class Asset(BaseModel):
 
 class TaskRun(BaseModel):
     id: str
-    task_type: Literal["asset_scan", "health_check", "diagnosis", "report_generate"]
+    task_type: Literal[
+        "asset_scan",
+        "health_check",
+        "diagnosis",
+        "security_check",
+        "report_generate",
+    ]
     requested_by: str = "local"
     source: Literal["cli", "web", "scheduler", "agent"] = "cli"
     status: TaskStatus = TaskStatus.pending
@@ -107,3 +113,15 @@ class Report(BaseModel):
     path: str
     summary: str = ""
     generated_at: datetime
+
+
+class Finding(BaseModel):
+    id: str
+    task_id: str
+    category: Literal["availability", "performance", "security", "configuration"]
+    severity: Severity
+    title: str
+    description: str
+    evidence_refs: list[str] = Field(default_factory=list)
+    recommendation: str = ""
+    requires_human_review: bool = True

@@ -26,6 +26,7 @@ def export_bundle(
     tasks = _tasks_for_bundle(store, task_id=task_id)
     task_ids = {task.id for task in tasks}
     probe_results = _probe_results_for_bundle(store, task_ids=task_ids)
+    findings = _findings_for_bundle(store, task_ids=task_ids)
     assets = store.list_assets()
 
     with TemporaryDirectory() as tmp:
@@ -39,8 +40,9 @@ def export_bundle(
             root / "probe-results.json",
             [result.model_dump(mode="json") for result in probe_results],
         )
+        _write_json(root / "findings.json", [finding.model_dump(mode="json") for finding in findings])
         (root / "summary.md").write_text(
-            _render_summary(tasks=tasks, assets=assets, probe_results=probe_results),
+            _render_summary(tasks=tasks, assets=assets, probe_results=probe_results, findings=findings),
             encoding="utf-8",
         )
 
@@ -72,6 +74,15 @@ def _probe_results_for_bundle(store: SQLiteStore, *, task_ids: set[str]) -> list
     return results
 
 
+def _findings_for_bundle(store: SQLiteStore, *, task_ids: set[str]):
+    if not task_ids:
+        return []
+    findings = []
+    for task_id in task_ids:
+        findings.extend(store.list_findings_for_task(task_id))
+    return findings
+
+
 def _config_summary(config: OpsConfig) -> dict[str, object]:
     return {
         "app": config.app.model_dump(mode="json"),
@@ -92,6 +103,7 @@ def _render_summary(
     tasks: list[TaskRun],
     assets: list[Asset],
     probe_results: list[ProbeResult],
+    findings: list,
 ) -> str:
     success_count = sum(1 for result in probe_results if result.status == "success")
     failed_count = len(probe_results) - success_count
@@ -103,6 +115,7 @@ def _render_summary(
             f"- 任务数量：{len(tasks)}",
             f"- 资产数量：{len(assets)}",
             f"- 探测结果数量：{len(probe_results)}",
+            f"- 风险发现数量：{len(findings)}",
             f"- 成功探测：{success_count}",
             f"- 异常或超时探测：{failed_count}",
             "",
@@ -112,10 +125,10 @@ def _render_summary(
             "- `tasks.json`：任务记录。",
             "- `assets.json`：资产记录。",
             "- `probe-results.json`：探测结果。",
+            "- `findings.json`：风险发现。",
         ]
     )
 
 
 def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-

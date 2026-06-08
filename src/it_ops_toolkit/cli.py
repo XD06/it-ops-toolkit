@@ -25,6 +25,7 @@ from .export import ExportError, default_bundle_path, export_bundle
 from .health import HealthCheckError, run_health_check
 from .models import TaskStatus
 from .reports import ReportError, generate_report
+from .security import run_security_check
 from .storage import SQLiteStore, TaskRecordNotFound
 from .tasks import finish_task_run, get_task, list_tasks, new_task_run
 
@@ -42,6 +43,7 @@ health_app = typer.Typer(help="网络与服务巡检。")
 diagnose_app = typer.Typer(help="场景化故障诊断。")
 export_app = typer.Typer(help="诊断包导出。")
 report_app = typer.Typer(help="报告输出。")
+security_app = typer.Typer(help="轻量安全检查。")
 task_app = typer.Typer(help="任务记录。")
 app.add_typer(config_app, name="config")
 app.add_typer(asset_app, name="asset")
@@ -49,6 +51,7 @@ app.add_typer(health_app, name="health")
 app.add_typer(diagnose_app, name="diagnose")
 app.add_typer(export_app, name="export")
 app.add_typer(report_app, name="report")
+app.add_typer(security_app, name="security")
 app.add_typer(task_app, name="task")
 
 
@@ -472,6 +475,50 @@ def export_diagnostic_bundle(
         raise typer.Exit(code=1) from exc
 
     console.print(f"[green]诊断包已生成：[/green]{bundle}")
+
+
+@security_app.command("check")
+def security_check(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """基于已发现资产执行轻量安全检查。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+        task = new_task_run(task_type="security_check")
+        store.save_task_run(task)
+        findings = run_security_check(config=loaded, task=task, store=store)
+        task = finish_task_run(task, status=TaskStatus.success)
+        task = task.model_copy(
+            update={
+                "result_refs": [finding.id for finding in findings],
+            }
+        )
+        store.save_task_run(task)
+    except ConfigError as exc:
+        if "task" in locals():
+            failed_task = finish_task_run(task, status=TaskStatus.failed)
+            store.save_task_run(failed_task)
+        console.print(f"[red]安全检查失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    table = Table(title="安全发现")
+    table.add_column("等级")
+    table.add_column("标题")
+    table.add_column("建议")
+
+    for finding in findings:
+        table.add_row(
+            finding.severity.value,
+            finding.title,
+            finding.recommendation,
+        )
+
+    console.print(table)
+    console.print(f"[bold]发现数量：[/bold]{len(findings)}")
+    console.print(f"[bold]任务 ID：[/bold]{task.id}")
 
 
 @task_app.command("list")

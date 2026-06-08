@@ -52,9 +52,9 @@ class ExportTests(unittest.TestCase):
             self.assertIn("config-summary.json", names)
             self.assertIn("tasks.json", names)
             self.assertIn("assets.json", names)
+            self.assertIn("findings.json", names)
             self.assertIn("probe-results.json", names)
 
 
 if __name__ == "__main__":
     unittest.main()
-

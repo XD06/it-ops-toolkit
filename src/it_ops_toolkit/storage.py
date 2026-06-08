@@ -10,6 +10,7 @@ from typing import Any
 from .models import (
     Asset,
     ErrorInfo,
+    Finding,
     ProbeResult,
     ProbeStatus,
     Report,
@@ -88,6 +89,21 @@ CREATE TABLE IF NOT EXISTS reports (
 
 CREATE INDEX IF NOT EXISTS idx_reports_source_task_id
 ON reports(source_task_id);
+
+CREATE TABLE IF NOT EXISTS findings (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    severity TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    evidence_refs TEXT NOT NULL,
+    recommendation TEXT NOT NULL,
+    requires_human_review INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_findings_task_id
+ON findings(task_id);
 """
 
 
@@ -319,6 +335,60 @@ class SQLiteStore:
                 ),
             )
 
+    def save_finding(self, finding: Finding) -> None:
+        self.ensure_schema()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO findings (
+                    id,
+                    task_id,
+                    category,
+                    severity,
+                    title,
+                    description,
+                    evidence_refs,
+                    recommendation,
+                    requires_human_review
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    finding.id,
+                    finding.task_id,
+                    finding.category,
+                    finding.severity.value,
+                    finding.title,
+                    finding.description,
+                    json.dumps(finding.evidence_refs, ensure_ascii=False),
+                    finding.recommendation,
+                    int(finding.requires_human_review),
+                ),
+            )
+
+    def list_findings_for_task(self, task_id: str) -> list[Finding]:
+        self.ensure_schema()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM findings
+                WHERE task_id = ?
+                ORDER BY severity DESC, id ASC
+                """,
+                (task_id,),
+            ).fetchall()
+        return [self._row_to_finding(row) for row in rows]
+
+    def list_all_findings(self) -> list[Finding]:
+        self.ensure_schema()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM findings
+                ORDER BY task_id ASC, id ASC
+                """
+            ).fetchall()
+        return [self._row_to_finding(row) for row in rows]
+
     def _row_to_task(self, row: sqlite3.Row) -> TaskRun:
         values: dict[str, Any] = dict(row)
         return TaskRun(
@@ -368,4 +438,18 @@ class SQLiteStore:
             observations=json.loads(values["observations"]),
             error=error,
             evidence=json.loads(values["evidence"]),
+        )
+
+    def _row_to_finding(self, row: sqlite3.Row) -> Finding:
+        values: dict[str, Any] = dict(row)
+        return Finding(
+            id=values["id"],
+            task_id=values["task_id"],
+            category=values["category"],
+            severity=values["severity"],
+            title=values["title"],
+            description=values["description"],
+            evidence_refs=json.loads(values["evidence_refs"]),
+            recommendation=values["recommendation"],
+            requires_human_review=bool(values["requires_human_review"]),
         )

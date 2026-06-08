@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
 
-from .models import Asset, ProbeResult, Report, TaskRun
+from .models import Asset, Finding, ProbeResult, Report, TaskRun
 from .storage import SQLiteStore, TaskRecordNotFound
 
 
@@ -34,18 +34,19 @@ def generate_report(
     report_type = _report_type_for_task(source_task)
     path = output_dir / f"{report_id}.{_extension_for_format(report_format)}"
     probe_results = store.list_probe_results_for_task(source_task.id)
+    findings = store.list_findings_for_task(source_task.id)
     assets = _assets_for_task(store, source_task)
 
     if report_format == "markdown":
         path.write_text(
-            _render_markdown(source_task, probe_results, assets),
+            _render_markdown(source_task, probe_results, assets, findings),
             encoding="utf-8",
         )
     elif report_format == "csv":
-        _write_csv(path, source_task, probe_results, assets)
+        _write_csv(path, probe_results, assets, findings)
     elif report_format == "json":
         path.write_text(
-            _render_json(source_task, probe_results, assets),
+            _render_json(source_task, probe_results, assets, findings),
             encoding="utf-8",
         )
 
@@ -56,7 +57,10 @@ def generate_report(
         title=f"{source_task.task_type} report",
         format=report_format,
         path=str(path),
-        summary=f"{source_task.task_type}: {len(probe_results)} probe results",
+        summary=(
+            f"{source_task.task_type}: "
+            f"{len(probe_results)} probe results, {len(findings)} findings"
+        ),
         generated_at=datetime.now(UTC),
     )
     store.save_report(report)
@@ -68,6 +72,8 @@ def _report_type_for_task(task: TaskRun) -> str:
         return "asset"
     if task.task_type == "health_check":
         return "health"
+    if task.task_type == "security_check":
+        return "security"
     return "generic"
 
 
@@ -90,6 +96,7 @@ def _render_markdown(
     task: TaskRun,
     probe_results: list[ProbeResult],
     assets: list[Asset],
+    findings: list[Finding],
 ) -> str:
     lines = [
         f"# {task.task_type} 报告",
@@ -130,6 +137,30 @@ def _render_markdown(
             )
         lines.append("")
 
+    if findings:
+        lines.extend(
+            [
+                "## 风险发现",
+                "",
+                "| 等级 | 标题 | 描述 | 建议 |",
+                "|---|---|---|---|",
+            ]
+        )
+        for finding in findings:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        finding.severity.value,
+                        finding.title,
+                        finding.description,
+                        finding.recommendation,
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+
     lines.extend(
         [
             "## 探测结果",
@@ -159,9 +190,9 @@ def _render_markdown(
 
 def _write_csv(
     path: Path,
-    task: TaskRun,
     probe_results: list[ProbeResult],
     assets: list[Asset],
+    findings: list[Finding],
 ) -> None:
     with path.open("w", newline="", encoding="utf-8-sig") as file:
         writer = csv.writer(file)
@@ -175,6 +206,19 @@ def _write_csv(
                         asset.status,
                         ",".join(str(port) for port in asset.open_ports),
                         asset.last_seen.isoformat(),
+                    ]
+                )
+            return
+
+        if findings:
+            writer.writerow(["severity", "title", "description", "recommendation"])
+            for finding in findings:
+                writer.writerow(
+                    [
+                        finding.severity.value,
+                        finding.title,
+                        finding.description,
+                        finding.recommendation,
                     ]
                 )
             return
@@ -197,10 +241,12 @@ def _render_json(
     task: TaskRun,
     probe_results: list[ProbeResult],
     assets: list[Asset],
+    findings: list[Finding],
 ) -> str:
     payload = {
         "task": task.model_dump(mode="json"),
         "assets": [asset.model_dump(mode="json") for asset in assets],
+        "findings": [finding.model_dump(mode="json") for finding in findings],
         "probe_results": [result.model_dump(mode="json") for result in probe_results],
     }
     return json.dumps(payload, ensure_ascii=False, indent=2)
@@ -208,4 +254,3 @@ def _render_json(
 
 def _compact_json(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-

@@ -36,6 +36,7 @@ ops task show
 
 ops report generate
 ops export bundle
+ops security check
 ```
 
 ## config 命令
@@ -275,6 +276,28 @@ ops export bundle --config ./ops.yaml --task task-001 --output ./bundles/task-00
 - 能输出 zip 文件。
 - zip 中包含配置摘要、任务、资产、探测结果和摘要文档。
 - 不直接打包完整原始配置，降低敏感信息泄露风险。
+
+## security 命令
+
+### ops security check
+
+用途：
+
+基于已发现资产执行轻量安全检查。
+
+示例：
+
+```powershell
+ops security check --config ./ops.yaml
+```
+
+验收：
+
+- 能读取已发现资产。
+- 能基于配置中的高风险端口生成风险发现。
+- 能保存安全检查任务。
+- 能输出风险等级、标题和建议。
+- 不执行漏洞利用或密码测试。
 
 ## 全局参数
 
