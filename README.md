@@ -53,6 +53,7 @@
 - [路线图](docs/03-roadmap.md)
 - [开发规则](docs/04-development-rules.md)
 - [文档协作与开发流程](docs/05-documentation-workflow.md)
+- [当前进度与交接说明](docs/06-current-status-and-handoff.md)
 - [Phase 1 实施计划](docs/plans/phase-1-cli-foundation.md)
 - [数据模型](docs/data-model.md)
 - [配置文件设计](docs/config-schema.md)
@@ -68,7 +69,7 @@
 
 ## 当前代码状态
 
-Phase 1 已开始搭建 Python CLI 骨架。
+Phase 1 已经跑通一批可用的 CLI 运维闭环，并开始覆盖常见桌面运维与网络排障场景。
 
 当前已实现：
 
@@ -98,7 +99,7 @@ Phase 1 已开始搭建 Python CLI 骨架。
 - `ops report generate`，支持 Markdown、CSV、JSON。
 - `ops export bundle`。
 - `ops security check`。
-- 配置模块单元测试。
+- 当前自动化测试 31 个。
 
 开发环境直接运行：
 
