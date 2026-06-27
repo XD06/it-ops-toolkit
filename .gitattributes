@@ -1,0 +1,19 @@
+# 统一换行符处理，避免 Windows / Linux 之间 CRLF / LF 混乱
+* text=auto eol=lf
+
+# 明确二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.sqlite binary
+*.db binary
+
+# YAML / Markdown / Python 统一 LF
+*.yaml text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+*.py   text eol=lf
+*.toml text eol=lf

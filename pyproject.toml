@@ -5,14 +5,46 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "it-ops-toolkit"
 version = "0.1.0"
-description = "CLI-first IT operations toolkit for SMB environments."
+description = "面向中小企业 IT 运维的 CLI 工具箱：资产发现、网络巡检、故障诊断、安全检查与报告。"
 readme = "README.md"
+license = { text = "MIT" }
 requires-python = ">=3.12"
+authors = [
+  { name = "IT Ops Toolkit Contributors" },
+]
+keywords = [
+  "it-ops",
+  "network",
+  "cli",
+  "ops",
+  "smb",
+  "infrastructure",
+  "diagnostics",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: System Administrators",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: System :: Networking",
+  "Topic :: System :: Systems Administration",
+  "Topic :: Utilities",
+]
 dependencies = [
   "pydantic>=2",
   "PyYAML>=6",
   "rich>=13",
   "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8",
+  "pytest-cov>=4",
 ]
 
 [project.scripts]
@@ -21,3 +53,6 @@ ops = "it_ops_toolkit.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

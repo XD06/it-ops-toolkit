@@ -1,16 +1,38 @@
 .superpowers/
 .codegraph/
 .venv/
+venv/
+env/
+
+# Python
 __pycache__/
 *.py[cod]
+*.egg-info/
+dist/
+build/
+
+# 数据与输出（运行时生成，不入库）
 *.sqlite
 *.db
 data/
 reports/
 bundles/
+
+# 测试与质量工具缓存
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-dist/
-build/
-*.egg-info/
+
+# 编辑器与系统文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 临时调试文件
+_debug*.py
+tmp*.py
