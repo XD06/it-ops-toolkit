@@ -50,6 +50,8 @@ ops export bundle
 ops security check
 ops security cert-check
 ops automate flush-dns
+
+ops web run
 ```
 
 ## config 命令
@@ -669,6 +671,37 @@ ops automate flush-dns --config ./ops.yaml --confirm
 - confirm 能保存执行结果、返回码、耗时和错误摘要。
 - 同时传 `--dry-run` 和 `--confirm` 必须报错。
 - 能通过 `ops report generate` 生成报告，并进入 `ops export bundle`。
+
+## web 命令
+
+### ops web run
+
+用途：
+
+启动 Web Console 服务（FastAPI + Uvicorn），在浏览器中查看资产、任务、报告和巡检结果。
+
+示例：
+
+```powershell
+ops web run --config ./ops.yaml
+ops web run --host 0.0.0.0 --port 3000
+ops web run --reload
+```
+
+说明：
+
+- 默认监听 `127.0.0.1:8080`，通过 `--host` 和 `--port` 调整。
+- `--reload` 启用开发热重载。
+- Web Console 只读调用 `SQLiteStore`，不直接调用 Adapter。
+- 启动后访问 `http://host:port` 查看仪表盘，`http://host:port/docs` 查看 API 文档。
+- 需要安装 Web 依赖：`pip install 'it-ops-toolkit[web]'`。
+
+验收：
+
+- 能正常启动并监听指定端口。
+- 仪表盘能展示资产、任务、报告和概览统计。
+- API 端点返回正确数据。
+- 缺少 Web 依赖时给出明确提示。
 
 ## 全局参数
 

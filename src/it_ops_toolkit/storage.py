@@ -469,6 +469,41 @@ class SQLiteStore:
                 ),
             )
 
+    def list_reports(self, *, limit: int = 50) -> list[Report]:
+        self.ensure_schema()
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM reports
+                ORDER BY generated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [self._row_to_report(row) for row in rows]
+
+    def get_report(self, report_id: str) -> Report | None:
+        self.ensure_schema()
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM reports WHERE id = ?",
+                (report_id,),
+            ).fetchone()
+        return self._row_to_report(row) if row else None
+
+    def _row_to_report(self, row: sqlite3.Row) -> Report:
+        values: dict[str, Any] = dict(row)
+        return Report(
+            id=values["id"],
+            source_task_id=values["source_task_id"],
+            report_type=values["report_type"],
+            title=values["title"],
+            format=values["format"],
+            path=values["path"],
+            summary=values["summary"],
+            generated_at=values["generated_at"],
+        )
+
     def save_finding(self, finding: Finding) -> None:
         self.ensure_schema()
         with self.connect() as connection:

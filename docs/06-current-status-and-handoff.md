@@ -60,7 +60,7 @@ $env:PYTHONPATH='src'
 python -m unittest discover -s tests
 ```
 
-结果：112 个测试通过。
+结果：137 个测试通过。
 
 ## 已实现能力
 
@@ -122,6 +122,17 @@ python -m unittest discover -s tests
 - `ops health tcp-matrix`：从 CSV 批量读取 TCP 目标，逐行执行端口可达性测试。
 - `ops health http-matrix`：从 CSV 批量读取 HTTP/HTTPS 目标，逐行执行可达性测试，支持只读方法 `GET` 和 `HEAD`，支持 `expected_status` 期望状态码比对（单个码、范围、多值）。
 
+### Web Console
+
+- `ops web run`：启动 Web Console 服务（FastAPI + Uvicorn），默认监听 `127.0.0.1:8080`。
+- 仪表盘首页：概览统计（资产数、任务数、报告数、发现项数、严重程度分布、任务类型分布）。
+- 资产列表页：表格展示所有资产，点击 IP 查看详情弹窗。
+- 任务历史页：表格展示最近任务，点击任务 ID 查看详情（含探测结果和发现项）。
+- 报告页：报告列表，点击查看报告文件内容。
+- REST API：`/api/overview`、`/api/assets`、`/api/assets/{ip}`、`/api/tasks`、`/api/tasks/{id}`、`/api/tasks/{id}/results`、`/api/tasks/{id}/findings`、`/api/tasks/{id}/snapshots`、`/api/reports`、`/api/reports/{id}`、`/api/reports/{id}/content`、`/api/health`。
+- Web Console 只读调用 `SQLiteStore`，不直接调用 Adapter，不承载业务判断逻辑。
+- 自动生成 OpenAPI 文档（`/docs`）。
+
 ## 当前尚未开始但已规划的能力
 
 这些方向适合继续按小切片推进：
@@ -130,6 +141,17 @@ python -m unittest discover -s tests
 - 自动化动作审计深化：例如记录更明确的执行人、确认来源和审批占位字段。
 
 ## 最近完成的切片
+
+### Phase 4: Web Console MVP（2026-06-27）
+
+- 新增 `src/it_ops_toolkit/web/` 包，包含 FastAPI 应用定义和 HTML 仪表盘渲染。
+- `web/app.py`：定义所有 API 路由，通过 `set_store()` 注入 `SQLiteStore` 实例，复用已有存储层和应用服务。
+- `web/dashboard.py`：生成自包含单页 HTML（暗色主题、不依赖外部 CSS/JS），通过 fetch 调用 `/api/*` 端点。
+- 存储层新增 `list_reports()` 和 `get_report()` 方法，补全报告查询能力。
+- CLI 新增 `ops web run` 命令，支持 `--host`、`--port`、`--reload` 参数。
+- `pyproject.toml` 新增 `[web]` 可选依赖组（`fastapi`、`uvicorn`），`[dev]` 组追加 `httpx`。
+- 新增 25 个单元测试覆盖所有 API 端点（健康检查、概览、资产、任务、探测结果、发现项、报告、报告内容、仪表盘页面）。
+- 架构验证通过：Web Console 只调用 `SQLiteStore` 和应用服务函数，不直接调用 Adapter。
 
 ### DNS 深化诊断：多 DNS 服务器对比（2026-06-27）
 
@@ -159,22 +181,33 @@ python -m unittest discover -s tests
 
 ## 当前推荐下一步
 
-建议继续做 DNS 解析耗时趋势记录或进入 Phase 4: Web Console MVP。
+Phase 4: Web Console MVP 已完成。建议继续深化 Web Console 或推进 Phase 5: AI 运维助手。
 
-理由：
+方向一：深化 Web Console
 
-- DNS 多服务器对比已完成，可进一步记录解析耗时趋势用于长期监控。
-- 或按路线图进入 Phase 4，在不重写核心逻辑的前提下增加 Web 可视化。
-- Web Console 可以复用已有应用服务，展示资产列表、任务历史、巡检结果和报告。
+- 增加手动任务触发（在 Web 界面点击按钮触发巡检或扫描）。
+- 增加配置查看页面。
+- 增加任务筛选和搜索。
+- 增加资产变化趋势可视化。
+
+方向二：Phase 5: AI 运维助手
+
+- 定义 AI 输入数据结构。
+- 让 AI 基于结构化巡检结果生成总结和建议。
+- AI 输出区分事实、推断和建议。
+
+方向三：继续深化诊断能力
+
+- DNS 解析耗时趋势记录、定时探测。
+- 自动化动作审计深化。
 
 推荐验证：
 
 ```powershell
 $env:PYTHONPATH='src'
 python -m pytest tests/ -v
-python -m it_ops_toolkit diagnose dns --help
-python -m it_ops_toolkit diagnose slow-network --help
-python -m it_ops_toolkit health http-matrix --help
+python -m it_ops_toolkit web run --help
+python -m it_ops_toolkit web run --port 8080
 ```
 
 ## 注意事项

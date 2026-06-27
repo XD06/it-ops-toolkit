@@ -68,6 +68,7 @@ report_app = typer.Typer(help="报告输出。")
 security_app = typer.Typer(help="轻量安全检查。")
 automate_app = typer.Typer(help="低风险自动化动作。")
 task_app = typer.Typer(help="任务记录。")
+web_app = typer.Typer(help="Web Console。")
 app.add_typer(config_app, name="config")
 app.add_typer(asset_app, name="asset")
 app.add_typer(health_app, name="health")
@@ -78,6 +79,7 @@ app.add_typer(report_app, name="report")
 app.add_typer(security_app, name="security")
 app.add_typer(automate_app, name="automate")
 app.add_typer(task_app, name="task")
+app.add_typer(web_app, name="web")
 
 
 def main() -> None:
@@ -1473,6 +1475,51 @@ def task_show(
         )
 
     console.print(table)
+
+
+@web_app.command("run")
+def web_run(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+    host: Annotated[
+        str,
+        typer.Option("--host", help="监听地址。"),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", help="监听端口。"),
+    ] = 8080,
+    reload: Annotated[
+        bool,
+        typer.Option("--reload", help="开发模式热重载。"),
+    ] = False,
+) -> None:
+    """启动 Web Console 服务。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    store.ensure_schema()
+
+    try:
+        import uvicorn
+    except ImportError as exc:
+        console.print("[red]缺少 Web 依赖。[/red]请安装：pip install 'it-ops-toolkit[web]'")
+        raise typer.Exit(code=1) from exc
+
+    from .web.app import app as web_app_instance, set_store
+
+    set_store(store)
+    console.print(f"[bold green]Web Console 启动中...[/bold green]")
+    console.print(f"  地址：[cyan]http://{host}:{port}[/cyan]")
+    console.print(f"  API 文档：[cyan]http://{host}:{port}/docs[/cyan]")
+    console.print(f"  数据库：[dim]{store.path}[/dim]")
+    console.print(f"  [yellow]按 Ctrl+C 停止服务[/yellow]")
+    uvicorn.run(web_app_instance, host=host, port=port, reload=reload)
 
 
 def _store_from_config(config_path: Path) -> SQLiteStore:
