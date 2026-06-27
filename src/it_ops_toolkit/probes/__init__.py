@@ -1,4 +1,4 @@
-from .dns import resolve_hostname
+from .dns import resolve_hostname, resolve_with_server
 from .http import check_http_url
 from .ping import ping_host
 from .tcp import check_tcp_port
@@ -10,4 +10,5 @@ __all__ = [
     "check_tls_certificate",
     "ping_host",
     "resolve_hostname",
+    "resolve_with_server",
 ]

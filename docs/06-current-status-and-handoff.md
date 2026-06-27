@@ -60,7 +60,7 @@ $env:PYTHONPATH='src'
 python -m unittest discover -s tests
 ```
 
-结果：99 个测试通过。
+结果：112 个测试通过。
 
 ## 已实现能力
 
@@ -75,7 +75,7 @@ python -m unittest discover -s tests
 ### Probe / Adapter
 
 - Ping Probe，解析 ping 输出提取延迟（min/avg/max RTT）和丢包率统计，支持 Windows 和 Linux 格式。
-- DNS Probe，当前使用系统解析器。
+- DNS Probe，使用系统解析器；新增 `resolve_with_server` 通过 nslookup 查询指定 DNS 服务器，支持多服务器对比。
 - TCP Probe。
 - HTTP Probe。
 - TLS Certificate Probe。
@@ -97,7 +97,7 @@ python -m unittest discover -s tests
 - `ops diagnose intranet`：诊断内网系统打不开。
 - `ops diagnose rdp`：诊断远程桌面连不上，只做 DNS、Ping、TCP 端口检查，不尝试登录。
 - `ops diagnose printer`：诊断打印机不可达，只做 DNS、Ping、TCP 端口检查，不发送打印任务、不登录后台、不改配置。
-- `ops diagnose dns`：诊断 DNS 解析结果和可选 TCP 端口，只读检查解析结果、期望 IP 和端口可达性。
+- `ops diagnose dns`：诊断 DNS 解析结果和可选 TCP 端口，支持 `--dns-servers` 多 DNS 服务器对比，只读检查解析结果、期望 IP、端口可达性和服务器间结果一致性。
 - `ops diagnose slow-network`：诊断网络慢的基础链路耗时，基于 Ping RTT 和丢包率、DNS 耗时、HTTP 耗时分解判断，只做只读检查。
 
 ### 本机信息采集
@@ -126,10 +126,23 @@ python -m unittest discover -s tests
 
 这些方向适合继续按小切片推进：
 
-- DNS 深化诊断：例如查看系统 DNS、对比多个 DNS 服务器、记录解析耗时趋势。
+- DNS 深化诊断：记录解析耗时趋势、定时探测。
 - 自动化动作审计深化：例如记录更明确的执行人、确认来源和审批占位字段。
 
 ## 最近完成的切片
+
+### DNS 深化诊断：多 DNS 服务器对比（2026-06-27）
+
+- 新增 `resolve_with_server()` 探针函数，通过 `nslookup` 查询指定 DNS 服务器，解析输出提取地址、服务器名称和服务器地址。
+- 支持 Windows（`Addresses:` 多行格式）和 Linux（`Address:` 逐行格式）两种 nslookup 输出。
+- 增强 `run_dns_diagnosis`：新增 `dns_servers` 参数，查询多个 DNS 服务器并对比结果。
+- 增强 `classify_dns_diagnosis`：新增三种多服务器对比分类：
+  - “所有指定 DNS 服务器解析均失败”
+  - “部分 DNS 服务器解析失败”
+  - “多 DNS 服务器解析结果不一致”
+- CLI `diagnose dns` 新增 `--dns-servers` 选项，逗号分隔。
+- 报告渲染增强：DNS 诊断报告显示多服务器对比表格（服务器、状态、解析地址、耗时、错误）。
+- 新增 13 个单元测试覆盖 nslookup 解析和诊断分类逻辑。
 
 ### Ping Probe 增强：延迟和丢包统计（2026-06-27）
 
@@ -146,21 +159,21 @@ python -m unittest discover -s tests
 
 ## 当前推荐下一步
 
-建议继续做 DNS 深化诊断，例如对比多个 DNS 服务器解析结果。
+建议继续做 DNS 解析耗时趋势记录或进入 Phase 4: Web Console MVP。
 
 理由：
 
-- 中小企业经常需要对比内网 DNS 和公共 DNS 的解析结果差异，判断是否 DNS 配置问题。
-- 这是只读能力，风险低，能复用现有 DNS Probe、TaskRun、报告和导出链路。
-- 可以进一步细化 `ops diagnose dns` 场景，增加多 DNS 服务器对比。
+- DNS 多服务器对比已完成，可进一步记录解析耗时趋势用于长期监控。
+- 或按路线图进入 Phase 4，在不重写核心逻辑的前提下增加 Web 可视化。
+- Web Console 可以复用已有应用服务，展示资产列表、任务历史、巡检结果和报告。
 
 推荐验证：
 
 ```powershell
 $env:PYTHONPATH='src'
 python -m pytest tests/ -v
-python -m it_ops_toolkit diagnose slow-network --help
 python -m it_ops_toolkit diagnose dns --help
+python -m it_ops_toolkit diagnose slow-network --help
 python -m it_ops_toolkit health http-matrix --help
 ```
 

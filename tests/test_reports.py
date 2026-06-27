@@ -230,6 +230,9 @@ class ReportTests(unittest.TestCase):
                     "expected_ip_matched": True,
                     "tcp_port": 443,
                     "tcp_reachable_addresses": ["192.168.1.10"],
+                    "dns_servers": [],
+                    "dns_server_entries": [],
+                    "all_match": None,
                 },
             )
 

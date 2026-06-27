@@ -102,6 +102,117 @@ class DiagnosisTests(unittest.TestCase):
 
         self.assertEqual(summary.title, "DNS 基础检查正常")
 
+    def test_classifies_dns_server_mismatch(self) -> None:
+        results = [
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"addresses": ["192.168.1.10"]},
+            ),
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"dns_server": "8.8.8.8", "addresses": ["203.0.113.50"]},
+            ),
+        ]
+
+        summary = classify_dns_diagnosis(
+            results,
+            dns_servers=["8.8.8.8"],
+        )
+
+        self.assertEqual(summary.title, "多 DNS 服务器解析结果不一致")
+
+    def test_classifies_dns_server_all_match(self) -> None:
+        results = [
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"addresses": ["192.168.1.10"]},
+            ),
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"dns_server": "8.8.8.8", "addresses": ["192.168.1.10"]},
+            ),
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"dns_server": "114.114.114.114", "addresses": ["192.168.1.10"]},
+            ),
+        ]
+
+        summary = classify_dns_diagnosis(
+            results,
+            dns_servers=["8.8.8.8", "114.114.114.114"],
+        )
+
+        self.assertEqual(summary.title, "DNS 基础检查正常")
+
+    def test_classifies_dns_server_partial_failure(self) -> None:
+        results = [
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"addresses": ["192.168.1.10"]},
+            ),
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"dns_server": "8.8.8.8", "addresses": ["192.168.1.10"]},
+            ),
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.failed,
+                observations={"dns_server": "10.0.0.53", "addresses": []},
+            ),
+        ]
+
+        summary = classify_dns_diagnosis(
+            results,
+            dns_servers=["8.8.8.8", "10.0.0.53"],
+        )
+
+        self.assertIn("部分 DNS 服务器解析失败", summary.title)
+        self.assertIn("10.0.0.53", summary.title)
+
+    def test_classifies_dns_server_all_failed(self) -> None:
+        results = [
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"addresses": ["192.168.1.10"]},
+            ),
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.failed,
+                observations={"dns_server": "8.8.8.8", "addresses": []},
+            ),
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.failed,
+                observations={"dns_server": "10.0.0.53", "addresses": []},
+            ),
+        ]
+
+        summary = classify_dns_diagnosis(
+            results,
+            dns_servers=["8.8.8.8", "10.0.0.53"],
+        )
+
+        self.assertEqual(summary.title, "所有指定 DNS 服务器解析均失败")
+
     def test_classifies_slow_dns_latency(self) -> None:
         results = [
             _result("ping", "223.5.5.5", ProbeStatus.success, duration_ms=40),

@@ -5,7 +5,7 @@ from ipaddress import ip_address
 from urllib.parse import urlparse
 
 from .models import ProbeResult, ProbeStatus, TaskRun
-from .probes import check_http_url, check_tcp_port, ping_host, resolve_hostname
+from .probes import check_http_url, check_tcp_port, ping_host, resolve_hostname, resolve_with_server
 from .storage import SQLiteStore
 
 
@@ -375,6 +375,7 @@ def run_dns_diagnosis(
     name: str,
     expected_ip: str | None = None,
     tcp_port: int | None = None,
+    dns_servers: list[str] | None = None,
     timeout_ms: int = 1000,
 ) -> tuple[list[ProbeResult], DiagnosisSummary]:
     target_name = name.strip()
@@ -404,12 +405,23 @@ def run_dns_diagnosis(
                 )
             )
 
+    if dns_servers:
+        for server in dns_servers:
+            server_result = resolve_with_server(
+                task_id=task.id,
+                hostname=target_name,
+                dns_server=server.strip(),
+                timeout_ms=timeout_ms,
+            )
+            results.append(server_result)
+
     for result in results:
         store.save_probe_result(result)
     return results, classify_dns_diagnosis(
         results,
         expected_ip=expected_ip,
         tcp_port=tcp_port,
+        dns_servers=dns_servers,
     )
 
 
@@ -498,6 +510,7 @@ def classify_dns_diagnosis(
     *,
     expected_ip: str | None = None,
     tcp_port: int | None = None,
+    dns_servers: list[str] | None = None,
 ) -> DiagnosisSummary:
     dns_result = _first_result(results, "dns")
     tcp_results = [result for result in results if result.probe_type == "tcp"]
@@ -524,11 +537,71 @@ def classify_dns_diagnosis(
             recommendation="DNS 已能解析到地址，继续检查目标服务端口、服务器防火墙和网络访问控制。",
         )
 
+    if dns_servers:
+        server_summary = _classify_dns_server_comparison(results, addresses)
+        if server_summary is not None:
+            return server_summary
+
     return DiagnosisSummary(
         title="DNS 基础检查正常",
         likely_area="未发现解析失败、解析结果偏差或目标端口基础异常",
         recommendation="如果业务仍异常，继续检查应用、代理、证书、客户端缓存或用户终端环境。",
     )
+
+
+def _classify_dns_server_comparison(
+    results: list[ProbeResult],
+    system_addresses: list[str],
+) -> DiagnosisSummary | None:
+    """Classify DNS server comparison results when dns_servers is provided."""
+    server_results = [
+        result for result in results
+        if result.probe_type == "dns" and result.observations.get("dns_server")
+    ]
+
+    if not server_results:
+        return None
+
+    failed_servers = [
+        str(result.observations.get("dns_server", ""))
+        for result in server_results
+        if not _is_success(result)
+    ]
+    successful_results = [
+        result for result in server_results if _is_success(result)
+    ]
+
+    if failed_servers and not successful_results:
+        return DiagnosisSummary(
+            title="所有指定 DNS 服务器解析均失败",
+            likely_area="DNS 服务器不可达、DNS 服务故障、网络策略阻断或名称不存在",
+            recommendation="检查指定 DNS 服务器的网络可达性、DNS 服务状态和安全设备策略，确认名称是否正确。",
+        )
+
+    if failed_servers:
+        return DiagnosisSummary(
+            title=f"部分 DNS 服务器解析失败（{', '.join(failed_servers)}）",
+            likely_area="对应 DNS 服务器不可达、服务故障或网络策略阻断",
+            recommendation=f"检查失败服务器（{', '.join(failed_servers)}）的可达性和 DNS 服务状态，对比正常服务器的解析结果。",
+        )
+
+    all_address_sets: list[set[str]] = []
+    for result in successful_results:
+        server_addresses = set(_dns_addresses(result))
+        all_address_sets.append(server_addresses)
+
+    system_set = set(system_addresses)
+    all_sets = [system_set, *all_address_sets]
+
+    unique_sets = [frozenset(s) for s in all_sets]
+    if len(set(unique_sets)) > 1:
+        return DiagnosisSummary(
+            title="多 DNS 服务器解析结果不一致",
+            likely_area="内外网 DNS 解析差异、DNS 缓存不一致、DNS 转发配置差异或 DNS 劫持",
+            recommendation="对比各 DNS 服务器的解析记录，检查内网 DNS 区域、转发器、缓存和 DHCP 下发的 DNS 配置，确认是否存在 DNS 劫持或分裂解析。",
+        )
+
+    return None
 
 
 def parse_service_url(url: str) -> dict[str, object]:

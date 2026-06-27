@@ -422,6 +422,9 @@ def _render_diagnosis_details(task: TaskRun, probe_results: list[ProbeResult]) -
             lines.append(
                 f"- TCP 可达地址：{','.join(str(address) for address in dns_summary['tcp_reachable_addresses']) if dns_summary['tcp_reachable_addresses'] else '无'}"
             )
+        if dns_summary.get("dns_servers"):
+            lines.append(f"- 对比 DNS 服务器：{','.join(dns_summary['dns_servers'])}")
+            lines.extend(_render_dns_server_comparison(dns_summary))
         lines.append("")
         return lines
 
@@ -684,6 +687,31 @@ def _printer_port_summary_payload(
     }
 
 
+def _render_dns_server_comparison(dns_summary: dict[str, object]) -> list[str]:
+    server_entries = dns_summary.get("dns_server_entries", [])
+    if not server_entries:
+        return []
+    lines = [
+        "",
+        "| DNS 服务器 | 状态 | 解析地址 | 耗时 ms | 错误 |",
+        "|---|---|---|---:|---|",
+    ]
+    for entry in server_entries:
+        addresses = entry.get("addresses", [])
+        addr_label = ",".join(addresses) if addresses else "无"
+        error_label = entry.get("error", "") or ""
+        lines.append(
+            f"| {entry['dns_server']} | {entry['status']} | {addr_label} | {entry['duration_ms'] if entry['duration_ms'] is not None else ''} | {error_label} |"
+        )
+    if dns_summary.get("all_match"):
+        lines.append("")
+        lines.append("- 所有 DNS 服务器解析结果一致")
+    elif dns_summary.get("all_match") is False:
+        lines.append("")
+        lines.append("- 注意：各 DNS 服务器解析结果不一致")
+    return lines
+
+
 def _dns_resolution_summary_payload(
     task: TaskRun,
     probe_results: list[ProbeResult],
@@ -707,6 +735,39 @@ def _dns_resolution_summary_payload(
         if result.target.value not in tcp_reachable_addresses:
             tcp_reachable_addresses.append(result.target.value)
 
+    dns_servers = task.summary.get("dns_servers") or []
+    dns_server_entries: list[dict[str, object]] = []
+    all_match: bool | None = None
+
+    if dns_servers:
+        for result in probe_results:
+            if result.probe_type != "dns":
+                continue
+            server = result.observations.get("dns_server")
+            if not server:
+                continue
+            server_addresses = result.observations.get("addresses", [])
+            if not isinstance(server_addresses, list):
+                server_addresses = []
+            dns_server_entries.append({
+                "dns_server": str(server),
+                "status": result.status.value,
+                "addresses": [str(addr) for addr in server_addresses],
+                "duration_ms": result.duration_ms,
+                "error": result.error.message if result.error else "",
+            })
+
+        if dns_server_entries:
+            successful_sets = [
+                frozenset(entry["addresses"])
+                for entry in dns_server_entries
+                if entry["status"] == "success" and entry["addresses"]
+            ]
+            system_set = frozenset(resolved_addresses)
+            all_sets = [system_set, *successful_sets]
+            unique = set(all_sets)
+            all_match = len(unique) <= 1
+
     return {
         "name": task.target_refs[0] if task.target_refs else "",
         "resolved_addresses": resolved_addresses,
@@ -714,6 +775,9 @@ def _dns_resolution_summary_payload(
         "expected_ip_matched": bool(expected_ip and str(expected_ip) in resolved_addresses),
         "tcp_port": tcp_port,
         "tcp_reachable_addresses": tcp_reachable_addresses,
+        "dns_servers": [str(s) for s in dns_servers] if dns_servers else [],
+        "dns_server_entries": dns_server_entries,
+        "all_match": all_match,
     }
 
 

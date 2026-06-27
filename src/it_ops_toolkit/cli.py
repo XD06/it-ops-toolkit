@@ -852,10 +852,15 @@ def diagnose_dns(
         int | None,
         typer.Option("--tcp-port", min=1, max=65535, help="对解析出的地址执行 TCP 端口检查。"),
     ] = None,
+    dns_servers: Annotated[
+        str | None,
+        typer.Option("--dns-servers", help="要对比的 DNS 服务器列表，逗号分隔，例如 8.8.8.8,114.114.114.114。"),
+    ] = None,
 ) -> None:
-    """诊断 DNS 解析结果和可选目标端口。"""
+    """诊断 DNS 解析结果和可选目标端口，支持多 DNS 服务器对比。"""
     try:
         loaded, store = _load_config_and_store(config)
+        parsed_servers = _parse_dns_servers(dns_servers)
         task = new_task_run(task_type="diagnosis")
         store.save_task_run(task)
         results, summary = run_dns_diagnosis(
@@ -864,6 +869,7 @@ def diagnose_dns(
             name=name,
             expected_ip=expected_ip,
             tcp_port=tcp_port,
+            dns_servers=parsed_servers,
             timeout_ms=loaded.probe_defaults.timeout_ms,
         )
         task = finish_task_run(task, status=TaskStatus.success)
@@ -879,6 +885,7 @@ def diagnose_dns(
                     "recommendation": summary.recommendation,
                     "expected_ip": expected_ip,
                     "tcp_port": tcp_port,
+                    "dns_servers": parsed_servers or [],
                 },
             }
         )
@@ -1479,6 +1486,15 @@ def _load_config_and_store(config_path: Path) -> tuple[OpsConfig, SQLiteStore]:
     if not storage_path.is_absolute():
         storage_path = config_path.resolve().parent / storage_path
     return loaded, SQLiteStore(storage_path.resolve())
+
+
+def _parse_dns_servers(value: str | None) -> list[str]:
+    if not value or not value.strip():
+        return []
+    servers = [s.strip() for s in value.split(",") if s.strip()]
+    if not servers:
+        return []
+    return servers
 
 
 def _task_type_label(task) -> str:
