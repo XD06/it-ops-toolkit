@@ -14,10 +14,12 @@ def check_http_url(
     task_id: str,
     url: str,
     timeout_ms: int,
+    method: str = "GET",
 ) -> ProbeResult:
     started = datetime.now(UTC)
     start = monotonic()
-    request = Request(url, method="GET", headers={"User-Agent": "it-ops-toolkit/0.1"})
+    method = method.upper()
+    request = Request(url, method=method, headers={"User-Agent": "it-ops-toolkit/0.1"})
     try:
         with urlopen(request, timeout=timeout_ms / 1000) as response:
             status_code = response.getcode()
@@ -32,6 +34,7 @@ def check_http_url(
                 duration_ms=int((monotonic() - start) * 1000),
                 observations={
                     "url": url,
+                    "method": method,
                     "status_code": status_code,
                     "final_url": response.geturl(),
                     "ok": 200 <= status_code < 400,
@@ -42,6 +45,7 @@ def check_http_url(
         return _failed_result(
             task_id=task_id,
             url=url,
+            method=method,
             started=started,
             start=start,
             code="http_error",
@@ -52,6 +56,7 @@ def check_http_url(
         return _failed_result(
             task_id=task_id,
             url=url,
+            method=method,
             started=started,
             start=start,
             code="http_failed",
@@ -64,6 +69,7 @@ def _failed_result(
     *,
     task_id: str,
     url: str,
+    method: str,
     started: datetime,
     start: float,
     code: str,
@@ -79,7 +85,7 @@ def _failed_result(
         started_at=started,
         ended_at=datetime.now(UTC),
         duration_ms=int((monotonic() - start) * 1000),
-        observations={"url": url, "ok": False},
+        observations={"url": url, "method": method, "ok": False},
         error=ErrorInfo(
             code=code,
             message=message,
@@ -92,4 +98,3 @@ def _failed_result(
 
 def _safe_id(value: str) -> str:
     return "".join(ch if ch.isalnum() else "-" for ch in value).strip("-").lower()
-

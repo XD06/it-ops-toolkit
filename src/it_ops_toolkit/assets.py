@@ -9,7 +9,7 @@ from ipaddress import ip_network
 from pathlib import Path
 
 from .config import OpsConfig, ScanProfile
-from .models import Asset, ProbeResult, ProbeStatus, TaskRun
+from .models import Asset, Finding, ProbeResult, ProbeStatus, Severity, TaskRun
 from .probes import check_tcp_port, ping_host
 from .storage import SQLiteStore
 
@@ -21,6 +21,10 @@ class AssetScanError(RuntimeError):
 
 
 class AssetExportError(RuntimeError):
+    pass
+
+
+class AssetImportError(RuntimeError):
     pass
 
 
@@ -84,6 +88,143 @@ def run_asset_scan(
     return assets, results
 
 
+def run_asset_diff(
+    *,
+    config: OpsConfig,
+    profile_name: str,
+    task: TaskRun,
+    store: SQLiteStore,
+    tcp_without_ping: bool = False,
+) -> tuple[list[Asset], list[ProbeResult], list[Finding], dict[str, object]]:
+    before_assets = {asset.ip: asset for asset in store.list_assets()}
+    scanned_assets, results = run_asset_scan(
+        config=config,
+        profile_name=profile_name,
+        task=task,
+        store=store,
+        tcp_without_ping=tcp_without_ping,
+    )
+    scanned_by_ip = {asset.ip: asset for asset in scanned_assets}
+
+    new_assets = sorted(ip for ip in scanned_by_ip if ip not in before_assets)
+    disappeared_assets = sorted(
+        ip
+        for ip, asset in before_assets.items()
+        if _asset_in_profile(asset, profile_name) and ip not in scanned_by_ip
+    )
+    newly_open_ports = _newly_open_ports(before_assets, scanned_by_ip)
+
+    findings = _asset_diff_findings(
+        task=task,
+        new_assets=new_assets,
+        disappeared_assets=disappeared_assets,
+        newly_open_ports=newly_open_ports,
+    )
+    for finding in findings:
+        store.save_finding(finding)
+
+    summary = _asset_diff_summary(
+        profile_name=profile_name,
+        scanned_assets=scanned_assets,
+        results=results,
+        new_assets=new_assets,
+        disappeared_assets=disappeared_assets,
+        newly_open_ports=newly_open_ports,
+    )
+    return scanned_assets, results, findings, summary
+
+
+def import_asset_notes(
+    *,
+    store: SQLiteStore,
+    csv_path: Path,
+) -> dict[str, object]:
+    if not csv_path.exists():
+        raise AssetImportError(f"asset notes file not found: {csv_path}")
+
+    updated_assets: list[str] = []
+    skipped_rows: list[dict[str, object]] = []
+    error_rows: list[dict[str, object]] = []
+
+    with csv_path.open("r", newline="", encoding="utf-8-sig") as file:
+        reader = csv.DictReader(file)
+        fieldnames = set(reader.fieldnames or [])
+        if "ip" not in fieldnames:
+            raise AssetImportError("asset notes CSV must include an 'ip' column")
+        allowed_columns = {
+            "ip",
+            "hostname",
+            "owner",
+            "asset_type",
+            "description",
+            "tags",
+        }
+        unsupported_columns = sorted(fieldnames - allowed_columns)
+        if unsupported_columns:
+            raise AssetImportError(
+                "unsupported asset notes CSV columns: "
+                + ", ".join(unsupported_columns)
+            )
+        for row_number, row in enumerate(reader, start=2):
+            ip = _clean_csv_value(row.get("ip"))
+            if not ip:
+                error_rows.append(
+                    {
+                        "row": row_number,
+                        "reason": "missing_ip",
+                    }
+                )
+                continue
+            if None in row:
+                error_rows.append(
+                    {
+                        "row": row_number,
+                        "ip": ip,
+                        "reason": "too_many_columns",
+                    }
+                )
+                continue
+
+            asset = store.get_asset_by_ip(ip)
+            if asset is None:
+                skipped_rows.append(
+                    {
+                        "row": row_number,
+                        "ip": ip,
+                        "reason": "asset_not_found",
+                    }
+                )
+                continue
+
+            updated_asset = asset.model_copy(
+                update={
+                    "hostname": _clean_csv_value(row.get("hostname")) or asset.hostname,
+                    "owner": _clean_csv_value(row.get("owner")),
+                    "asset_type": _clean_csv_value(row.get("asset_type"))
+                    or asset.asset_type,
+                    "description": _clean_csv_value(row.get("description")),
+                    "tags": _parse_tags(row.get("tags")),
+                }
+            )
+            store.save_asset(updated_asset)
+            updated_assets.append(ip)
+
+    return {
+        "scenario": "asset_import_notes",
+        "scenario_label": "资产备注导入",
+        "title": _asset_import_title(updated_assets, skipped_rows, error_rows),
+        "likely_area": "资产元数据维护",
+        "recommendation": "复核跳过和错误行；确认负责人、用途和标签符合当前资产台账。",
+        "source_file": str(csv_path),
+        "updated_assets": updated_assets,
+        "updated_count": len(updated_assets),
+        "skipped_rows": skipped_rows,
+        "skipped_count": len(skipped_rows),
+        "error_rows": error_rows,
+        "error_count": len(error_rows),
+    }
+
+
 def export_assets(
     *,
     store: SQLiteStore,
@@ -116,6 +257,150 @@ def default_asset_export_path(base_dir: Path, export_format: str) -> Path:
         raise AssetExportError(f"unsupported asset export format: {export_format}")
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     return base_dir / f"assets-{stamp}.{export_format}"
+
+
+def _asset_in_profile(asset: Asset, profile_name: str) -> bool:
+    return asset.source == f"scan_profile:{profile_name}"
+
+
+def _newly_open_ports(
+    before_assets: dict[str, Asset],
+    scanned_assets: dict[str, Asset],
+) -> dict[str, list[int]]:
+    changes: dict[str, list[int]] = {}
+    for ip, asset in scanned_assets.items():
+        before = before_assets.get(ip)
+        if before is None:
+            continue
+        previous_ports = set(before.open_ports)
+        current_ports = set(asset.open_ports)
+        added_ports = sorted(current_ports - previous_ports)
+        if added_ports:
+            changes[ip] = added_ports
+    return changes
+
+
+def _asset_diff_findings(
+    *,
+    task: TaskRun,
+    new_assets: list[str],
+    disappeared_assets: list[str],
+    newly_open_ports: dict[str, list[int]],
+) -> list[Finding]:
+    findings: list[Finding] = []
+    if new_assets:
+        findings.append(
+            Finding(
+                id=f"finding-{task.id}-new-assets",
+                task_id=task.id,
+                category="configuration",
+                severity=Severity.medium,
+                title="发现新增资产",
+                description=f"本次扫描发现 {len(new_assets)} 个历史资产库中不存在的 IP。",
+                evidence_refs=new_assets,
+                recommendation="确认这些设备是否为授权接入，并补充负责人、用途和资产类型。",
+            )
+        )
+    if disappeared_assets:
+        findings.append(
+            Finding(
+                id=f"finding-{task.id}-missing-assets",
+                task_id=task.id,
+                category="availability",
+                severity=Severity.low,
+                title="发现历史资产未出现在本次扫描",
+                description=f"有 {len(disappeared_assets)} 个历史资产本次未被发现。",
+                evidence_refs=disappeared_assets,
+                recommendation="确认设备是否下线、改 IP、禁 Ping，或是否存在网络链路问题。",
+            )
+        )
+    if newly_open_ports:
+        evidence_refs = [
+            f"{ip}:{port}"
+            for ip, ports in newly_open_ports.items()
+            for port in ports
+        ]
+        findings.append(
+            Finding(
+                id=f"finding-{task.id}-new-open-ports",
+                task_id=task.id,
+                category="security",
+                severity=Severity.medium,
+                title="发现新增开放端口",
+                description=f"有 {len(evidence_refs)} 个端口相比历史资产记录新增开放。",
+                evidence_refs=evidence_refs,
+                recommendation="确认新增端口是否符合业务预期；不需要的服务应关闭或限制访问范围。",
+            )
+        )
+    return findings
+
+
+def _asset_diff_summary(
+    *,
+    profile_name: str,
+    scanned_assets: list[Asset],
+    results: list[ProbeResult],
+    new_assets: list[str],
+    disappeared_assets: list[str],
+    newly_open_ports: dict[str, list[int]],
+) -> dict[str, object]:
+    new_port_count = sum(len(ports) for ports in newly_open_ports.values())
+    changed = bool(new_assets or disappeared_assets or newly_open_ports)
+    title = "资产变化检查发现变化" if changed else "资产变化检查未发现明显变化"
+    likely_area = "资产接入、设备在线状态或服务端口发生变化" if changed else "本次扫描与历史资产记录基本一致"
+    recommendation = (
+        "复核新增设备、未出现设备和新增开放端口，确认是否符合预期。"
+        if changed
+        else "保持现有资产盘点节奏，定期重新执行变化检查。"
+    )
+    return {
+        "scenario": "asset_diff",
+        "scenario_label": "资产变化对比",
+        "title": title,
+        "likely_area": likely_area,
+        "recommendation": recommendation,
+        "profile": profile_name,
+        "scanned_asset_count": len(scanned_assets),
+        "probe_result_count": len(results),
+        "new_assets": new_assets,
+        "disappeared_assets": disappeared_assets,
+        "newly_open_ports": newly_open_ports,
+        "new_asset_count": len(new_assets),
+        "disappeared_asset_count": len(disappeared_assets),
+        "newly_open_port_count": new_port_count,
+    }
+
+
+def _asset_import_title(
+    updated_assets: list[str],
+    skipped_rows: list[dict[str, object]],
+    error_rows: list[dict[str, object]],
+) -> str:
+    if error_rows:
+        return "资产备注导入完成，但存在错误行"
+    if skipped_rows:
+        return "资产备注导入完成，但存在跳过行"
+    return "资产备注导入完成"
+
+
+def _clean_csv_value(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned or None
+
+
+def _parse_tags(value: str | None) -> list[str]:
+    cleaned = _clean_csv_value(value)
+    if not cleaned:
+        return []
+    normalized = cleaned.replace("，", ",").replace(";", ",")
+    tags: list[str] = []
+    for item in normalized.split(","):
+        tag = item.strip()
+        if tag and tag not in tags:
+            tags.append(tag)
+    return tags
 
 
 def expand_scan_hosts(profile: ScanProfile) -> list[str]:
@@ -197,6 +482,9 @@ def _write_assets_csv(path: Path, assets: list[Asset]) -> None:
                 "vendor",
                 "os_hint",
                 "asset_type",
+                "owner",
+                "description",
+                "tags",
                 "open_ports",
                 "status",
                 "first_seen",
@@ -213,6 +501,9 @@ def _write_assets_csv(path: Path, assets: list[Asset]) -> None:
                     asset.vendor or "",
                     asset.os_hint or "",
                     asset.asset_type or "",
+                    asset.owner or "",
+                    asset.description or "",
+                    ",".join(asset.tags),
                     ",".join(str(port) for port in asset.open_ports),
                     asset.status,
                     asset.first_seen.isoformat(),

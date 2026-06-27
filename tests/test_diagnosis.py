@@ -2,10 +2,15 @@ import unittest
 from datetime import UTC, datetime
 
 from it_ops_toolkit.diagnosis import (
+    classify_dns_diagnosis,
     classify_internet_diagnosis,
     classify_intranet_diagnosis,
+    classify_printer_diagnosis,
     classify_rdp_diagnosis,
+    classify_slow_network_diagnosis,
+    normalize_ports,
     parse_host_port_target,
+    parse_ports,
     parse_service_url,
 )
 from it_ops_toolkit.models import ProbeResult, ProbeStatus, Target
@@ -33,6 +38,91 @@ class DiagnosisTests(unittest.TestCase):
         summary = classify_internet_diagnosis(results)
 
         self.assertEqual(summary.title, "基础互联网连通性正常")
+
+    def test_classifies_dns_lookup_failure(self) -> None:
+        results = [
+            _result("dns", "missing.example.local", ProbeStatus.failed),
+        ]
+
+        summary = classify_dns_diagnosis(results)
+
+        self.assertEqual(summary.title, "DNS 解析失败")
+
+    def test_classifies_dns_expected_ip_mismatch(self) -> None:
+        results = [
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"addresses": ["192.168.1.10"]},
+            ),
+        ]
+
+        summary = classify_dns_diagnosis(results, expected_ip="192.168.1.20")
+
+        self.assertEqual(summary.title, "DNS 解析结果不符合预期")
+
+    def test_classifies_dns_tcp_issue(self) -> None:
+        results = [
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"addresses": ["192.168.1.10"]},
+            ),
+            _result(
+                "tcp",
+                "192.168.1.10:443",
+                ProbeStatus.failed,
+                observations={"port": 443, "open": False},
+            ),
+        ]
+
+        summary = classify_dns_diagnosis(results, expected_ip="192.168.1.10", tcp_port=443)
+
+        self.assertEqual(summary.title, "DNS 解析正常，但目标端口不可达")
+
+    def test_classifies_dns_success(self) -> None:
+        results = [
+            _result(
+                "dns",
+                "app.example.local",
+                ProbeStatus.success,
+                observations={"addresses": ["192.168.1.10"]},
+            ),
+            _result(
+                "tcp",
+                "192.168.1.10:443",
+                ProbeStatus.success,
+                observations={"port": 443, "open": True},
+            ),
+        ]
+
+        summary = classify_dns_diagnosis(results, expected_ip="192.168.1.10", tcp_port=443)
+
+        self.assertEqual(summary.title, "DNS 基础检查正常")
+
+    def test_classifies_slow_dns_latency(self) -> None:
+        results = [
+            _result("ping", "223.5.5.5", ProbeStatus.success, duration_ms=40),
+            _result("dns", "www.baidu.com", ProbeStatus.success, duration_ms=650),
+            _result("http", "https://www.baidu.com", ProbeStatus.success, duration_ms=300),
+        ]
+
+        summary = classify_slow_network_diagnosis(results)
+
+        self.assertEqual(summary.title, "DNS 解析耗时偏高")
+
+    def test_classifies_slow_http_latency(self) -> None:
+        results = [
+            _result("ping", "223.5.5.5", ProbeStatus.success, duration_ms=40),
+            _result("dns", "www.baidu.com", ProbeStatus.success, duration_ms=80),
+            _result("http", "https://www.baidu.com", ProbeStatus.success, duration_ms=1500),
+        ]
+
+        summary = classify_slow_network_diagnosis(results)
+
+        self.assertEqual(summary.title, "HTTP/HTTPS 响应耗时偏高")
 
     def test_parse_service_url_uses_default_https_port(self) -> None:
         parsed = parse_service_url("https://intranet.example.local/path")
@@ -79,8 +169,58 @@ class DiagnosisTests(unittest.TestCase):
 
         self.assertEqual(summary.title, "目标主机可达，但 RDP 端口不可达")
 
+    def test_parse_ports_supports_csv_and_deduplicates(self) -> None:
+        ports = parse_ports("9100, 515, 631, 9100")
 
-def _result(probe_type: str, target: str, status: ProbeStatus) -> ProbeResult:
+        self.assertEqual(ports, [9100, 515, 631])
+
+    def test_normalize_ports_rejects_empty_list(self) -> None:
+        with self.assertRaises(ValueError):
+            normalize_ports([])
+
+    def test_classifies_printer_dns_issue(self) -> None:
+        results = [
+            _result("dns", "printer-01.example.local", ProbeStatus.failed),
+            _result("ping", "printer-01.example.local", ProbeStatus.failed),
+            _result("tcp", "printer-01.example.local:9100", ProbeStatus.failed),
+        ]
+
+        summary = classify_printer_diagnosis(results)
+
+        self.assertEqual(summary.title, "打印机名称解析异常")
+
+    def test_classifies_printer_port_issue(self) -> None:
+        results = [
+            _result("ping", "192.168.1.80", ProbeStatus.success),
+            _result("tcp", "192.168.1.80:9100", ProbeStatus.failed),
+            _result("tcp", "192.168.1.80:515", ProbeStatus.failed),
+            _result("tcp", "192.168.1.80:631", ProbeStatus.failed),
+        ]
+
+        summary = classify_printer_diagnosis(results)
+
+        self.assertEqual(summary.title, "打印机可达，但常见打印端口不可达")
+
+    def test_classifies_printer_success_when_any_port_open(self) -> None:
+        results = [
+            _result("ping", "192.168.1.80", ProbeStatus.success),
+            _result("tcp", "192.168.1.80:9100", ProbeStatus.failed),
+            _result("tcp", "192.168.1.80:515", ProbeStatus.success),
+            _result("tcp", "192.168.1.80:631", ProbeStatus.failed),
+        ]
+
+        summary = classify_printer_diagnosis(results)
+
+        self.assertEqual(summary.title, "至少一个打印端口可达")
+
+
+def _result(
+    probe_type: str,
+    target: str,
+    status: ProbeStatus,
+    observations: dict[str, object] | None = None,
+    duration_ms: int | None = None,
+) -> ProbeResult:
     now = datetime.now(UTC)
     target_type = "url" if target.startswith("http") else "hostname"
     return ProbeResult(
@@ -91,6 +231,8 @@ def _result(probe_type: str, target: str, status: ProbeStatus) -> ProbeResult:
         status=status,
         started_at=now,
         ended_at=now,
+        duration_ms=duration_ms,
+        observations=observations or {},
     )
 
 

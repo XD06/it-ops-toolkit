@@ -128,8 +128,7 @@ def _render_summary(
 ) -> str:
     success_count = sum(1 for result in probe_results if result.status == "success")
     failed_count = len(probe_results) - success_count
-    return "\n".join(
-        [
+    lines = [
             "# 诊断包摘要",
             "",
             f"- 生成时间：`{datetime.now(UTC).isoformat()}`",
@@ -141,6 +140,35 @@ def _render_summary(
             f"- 成功探测：{success_count}",
             f"- 异常或超时探测：{failed_count}",
             "",
+    ]
+
+    summarized_tasks = [task for task in tasks if task.summary]
+    if summarized_tasks:
+        lines.extend(
+            [
+                "## 任务摘要",
+                "",
+                "| 任务 ID | 类型 | 结论 | 可能范围 |",
+                "|---|---|---|---|",
+            ]
+        )
+        for task in summarized_tasks:
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        task.id,
+                        task.task_type,
+                        str(task.summary.get("title", "")),
+                        str(task.summary.get("likely_area", "")),
+                    ]
+                )
+                + " |"
+            )
+        lines.append("")
+
+    lines.extend(
+        [
             "## 文件说明",
             "",
             "- `config-summary.json`：脱敏后的配置摘要。",
@@ -151,6 +179,7 @@ def _render_summary(
             "- `local-snapshots.json`：本机系统与网络采集快照。",
         ]
     )
+    return "\n".join(lines)
 
 
 def _write_json(path: Path, payload: object) -> None:

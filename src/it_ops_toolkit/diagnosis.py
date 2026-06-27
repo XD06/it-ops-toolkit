@@ -13,6 +13,9 @@ DEFAULT_EXTERNAL_IP = "223.5.5.5"
 DEFAULT_DNS_NAME = "www.baidu.com"
 DEFAULT_HTTP_URL = "https://www.baidu.com"
 DEFAULT_RDP_PORT = 3389
+DEFAULT_PRINTER_PORTS = (9100, 515, 631)
+SLOW_DNS_THRESHOLD_MS = 500
+SLOW_NETWORK_THRESHOLD_MS = 1000
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,91 @@ def classify_internet_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
         title="基础互联网连通性正常",
         likely_area="未发现基础连通性异常",
         recommendation="如果用户仍然反馈异常，继续检查具体应用、账号、代理、DNS 缓存或业务系统状态。",
+    )
+
+
+def run_slow_network_diagnosis(
+    *,
+    task: TaskRun,
+    store: SQLiteStore,
+    external_ip: str = DEFAULT_EXTERNAL_IP,
+    dns_name: str = DEFAULT_DNS_NAME,
+    http_url: str = DEFAULT_HTTP_URL,
+    timeout_ms: int = 1000,
+    retries: int = 1,
+) -> tuple[list[ProbeResult], DiagnosisSummary]:
+    results = [
+        ping_host(
+            task_id=task.id,
+            target=external_ip,
+            timeout_ms=timeout_ms,
+            retries=retries,
+        ),
+        resolve_hostname(
+            task_id=task.id,
+            hostname=dns_name,
+            timeout_ms=timeout_ms,
+        ),
+        check_http_url(
+            task_id=task.id,
+            url=http_url,
+            timeout_ms=timeout_ms,
+        ),
+    ]
+    for result in results:
+        store.save_probe_result(result)
+    return results, classify_slow_network_diagnosis(results)
+
+
+def classify_slow_network_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
+    ping_result = _first_result(results, "ping")
+    dns_result = _first_result(results, "dns")
+    http_result = _first_result(results, "http")
+
+    ping_ok = _is_success(ping_result)
+    dns_ok = _is_success(dns_result)
+    http_ok = _is_success(http_result)
+
+    if not ping_ok:
+        return DiagnosisSummary(
+            title="基础链路不可达",
+            likely_area="本机网络、网关、出口、防火墙或运营商链路",
+            recommendation="先检查本机 IP、网关、无线/网线、默认路由和出口设备状态，再继续分析慢的问题。",
+        )
+    if not dns_ok:
+        return DiagnosisSummary(
+            title="DNS 解析异常",
+            likely_area="DNS 配置、DNS 服务、上游解析或安全设备策略",
+            recommendation="先修复 DNS 解析失败，再继续判断网络是否真的变慢。",
+        )
+    if not http_ok:
+        return DiagnosisSummary(
+            title="HTTP/HTTPS 访问异常",
+            likely_area="代理、证书、目标站点、出口 HTTP/HTTPS 策略或应用服务",
+            recommendation="检查代理配置、证书、浏览器错误、出口安全设备和目标服务状态。",
+        )
+    if _duration_ms(dns_result) >= SLOW_DNS_THRESHOLD_MS:
+        return DiagnosisSummary(
+            title="DNS 解析耗时偏高",
+            likely_area="DNS 服务性能、DNS 转发链路、上游解析或安全设备检查",
+            recommendation="检查本机 DNS、内网 DNS 服务负载、转发器、上游 DNS 和安全设备 DNS 检查策略。",
+        )
+    if _duration_ms(ping_result) >= SLOW_NETWORK_THRESHOLD_MS:
+        return DiagnosisSummary(
+            title="基础网络延迟偏高",
+            likely_area="无线质量、链路拥塞、跨网段路由、出口链路或运营商网络",
+            recommendation="对比同网段其他终端、网关延迟、无线信号、出口带宽和链路丢包情况。",
+        )
+    if _duration_ms(http_result) >= SLOW_NETWORK_THRESHOLD_MS:
+        return DiagnosisSummary(
+            title="HTTP/HTTPS 响应耗时偏高",
+            likely_area="目标应用、代理、证书握手、出口策略、带宽或服务器性能",
+            recommendation="继续拆分代理、TLS、应用响应和目标服务器负载，必要时对比多个 URL。",
+        )
+    return DiagnosisSummary(
+        title="基础延迟检查正常",
+        likely_area="未发现基础 Ping、DNS 或 HTTP 耗时异常",
+        recommendation="如果用户仍反馈网络慢，继续检查具体应用、无线漫游、代理、终端负载和业务服务器性能。",
     )
 
 
@@ -223,6 +311,97 @@ def run_rdp_diagnosis(
     return results, classify_rdp_diagnosis(results)
 
 
+def run_printer_diagnosis(
+    *,
+    task: TaskRun,
+    store: SQLiteStore,
+    target: str,
+    ports: list[int] | tuple[int, ...] = DEFAULT_PRINTER_PORTS,
+    timeout_ms: int = 1000,
+    retries: int = 1,
+) -> tuple[list[ProbeResult], DiagnosisSummary]:
+    parsed = parse_host_port_target(target, default_port=_first_port(ports))
+    host = parsed["host"]
+    target_ports = normalize_ports(ports)
+    results: list[ProbeResult] = []
+
+    if not _is_ip_address(host):
+        results.append(
+            resolve_hostname(
+                task_id=task.id,
+                hostname=host,
+                timeout_ms=timeout_ms,
+            )
+        )
+
+    results.append(
+        ping_host(
+            task_id=task.id,
+            target=host,
+            timeout_ms=timeout_ms,
+            retries=retries,
+        )
+    )
+    for port in target_ports:
+        results.append(
+            check_tcp_port(
+                task_id=task.id,
+                target=host,
+                port=port,
+                timeout_ms=timeout_ms,
+            )
+        )
+
+    for result in results:
+        store.save_probe_result(result)
+    return results, classify_printer_diagnosis(results)
+
+
+def run_dns_diagnosis(
+    *,
+    task: TaskRun,
+    store: SQLiteStore,
+    name: str,
+    expected_ip: str | None = None,
+    tcp_port: int | None = None,
+    timeout_ms: int = 1000,
+) -> tuple[list[ProbeResult], DiagnosisSummary]:
+    target_name = name.strip()
+    if not target_name:
+        raise ValueError("DNS name is required")
+    if tcp_port is not None:
+        _validate_port(tcp_port)
+
+    results: list[ProbeResult] = [
+        resolve_hostname(
+            task_id=task.id,
+            hostname=target_name,
+            timeout_ms=timeout_ms,
+        )
+    ]
+
+    dns_result = results[0]
+    if _is_success(dns_result) and tcp_port is not None:
+        addresses = _dns_addresses(dns_result)
+        for address in addresses:
+            results.append(
+                check_tcp_port(
+                    task_id=task.id,
+                    target=address,
+                    port=tcp_port,
+                    timeout_ms=timeout_ms,
+                )
+            )
+
+    for result in results:
+        store.save_probe_result(result)
+    return results, classify_dns_diagnosis(
+        results,
+        expected_ip=expected_ip,
+        tcp_port=tcp_port,
+    )
+
+
 def classify_rdp_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
     dns_result = _first_result(results, "dns")
     ping_result = _first_result(results, "ping")
@@ -263,6 +442,84 @@ def classify_rdp_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
     )
 
 
+def classify_printer_diagnosis(results: list[ProbeResult]) -> DiagnosisSummary:
+    dns_result = _first_result(results, "dns")
+    ping_result = _first_result(results, "ping")
+    tcp_results = [result for result in results if result.probe_type == "tcp"]
+
+    dns_ok = dns_result is None or _is_success(dns_result)
+    ping_ok = _is_success(ping_result)
+    any_tcp_ok = any(_is_success(result) for result in tcp_results)
+
+    if not dns_ok:
+        return DiagnosisSummary(
+            title="打印机名称解析异常",
+            likely_area="DNS、主机名配置、搜索域或打印服务器记录",
+            recommendation="先确认打印机名称是否正确，再检查本机 DNS、内网 DNS 记录和打印服务器中的目标地址配置。",
+        )
+    if any_tcp_ok and not ping_ok:
+        return DiagnosisSummary(
+            title="打印端口可达，但 Ping 不通",
+            likely_area="打印机或网络设备禁 ICMP，但打印服务端口可访问",
+            recommendation="基础打印端口已可达，继续检查打印驱动、队列状态、共享策略和客户端指向的端口配置。",
+        )
+    if not ping_ok and not any_tcp_ok:
+        return DiagnosisSummary(
+            title="打印机或网络路径不可达",
+            likely_area="打印机离线、网线/交换机端口、VLAN、ACL 或防火墙",
+            recommendation="先确认打印机已开机、网口和链路灯正常，再检查同网段连通性、网关路由、交换机端口和访问控制策略。",
+        )
+    if not any_tcp_ok:
+        return DiagnosisSummary(
+            title="打印机可达，但常见打印端口不可达",
+            likely_area="打印服务未启用、端口配置错误、防火墙阻断或设备仅开放特定协议",
+            recommendation="检查打印机是否启用 RAW/LPD/IPP，对照驱动或打印服务器中的端口配置，并核对设备侧访问控制。",
+        )
+    return DiagnosisSummary(
+        title="至少一个打印端口可达",
+        likely_area="基础网络路径和打印服务端口正常",
+        recommendation="如果仍无法打印，继续检查驱动、队列暂停、共享权限、默认打印机设置和客户端错误提示。",
+    )
+
+
+def classify_dns_diagnosis(
+    results: list[ProbeResult],
+    *,
+    expected_ip: str | None = None,
+    tcp_port: int | None = None,
+) -> DiagnosisSummary:
+    dns_result = _first_result(results, "dns")
+    tcp_results = [result for result in results if result.probe_type == "tcp"]
+
+    if not _is_success(dns_result):
+        return DiagnosisSummary(
+            title="DNS 解析失败",
+            likely_area="DNS 配置、DNS 服务、搜索域、解析记录或网络策略",
+            recommendation="先确认名称是否正确，再检查本机 DNS、内网 DNS 服务、转发策略和解析记录。",
+        )
+
+    addresses = _dns_addresses(dns_result)
+    if expected_ip and expected_ip not in addresses:
+        return DiagnosisSummary(
+            title="DNS 解析结果不符合预期",
+            likely_area="DNS 记录错误、缓存未刷新、内外网解析不一致或命中错误 DNS",
+            recommendation="核对权威记录、内网 DNS 区域、客户端 DNS 缓存和 DHCP 下发的 DNS 服务器。",
+        )
+
+    if tcp_port is not None and tcp_results and not any(_is_success(result) for result in tcp_results):
+        return DiagnosisSummary(
+            title="DNS 解析正常，但目标端口不可达",
+            likely_area="目标服务、防火墙、ACL、路由或端口策略",
+            recommendation="DNS 已能解析到地址，继续检查目标服务端口、服务器防火墙和网络访问控制。",
+        )
+
+    return DiagnosisSummary(
+        title="DNS 基础检查正常",
+        likely_area="未发现解析失败、解析结果偏差或目标端口基础异常",
+        recommendation="如果业务仍异常，继续检查应用、代理、证书、客户端缓存或用户终端环境。",
+    )
+
+
 def parse_service_url(url: str) -> dict[str, object]:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
@@ -300,12 +557,43 @@ def parse_host_port_target(target: str, *, default_port: int) -> dict[str, objec
     return {"host": value, "port": default_port}
 
 
+def parse_ports(value: str) -> list[int]:
+    raw_items = [item.strip() for item in value.split(",")]
+    if not raw_items or any(not item for item in raw_items):
+        raise ValueError("ports must be a comma-separated list of TCP ports")
+    return normalize_ports([int(item) if item.isdigit() else _raise_invalid_port(item) for item in raw_items])
+
+
+def normalize_ports(ports: list[int] | tuple[int, ...]) -> list[int]:
+    normalized: list[int] = []
+    for port in ports:
+        valid_port = _validate_port(port)
+        if valid_port not in normalized:
+            normalized.append(valid_port)
+    if not normalized:
+        raise ValueError("at least one TCP port is required")
+    return normalized
+
+
 def _first_result(results: list[ProbeResult], probe_type: str) -> ProbeResult | None:
     return next((result for result in results if result.probe_type == probe_type), None)
 
 
+def _dns_addresses(result: ProbeResult | None) -> list[str]:
+    if result is None:
+        return []
+    addresses = result.observations.get("addresses", [])
+    if not isinstance(addresses, list):
+        return []
+    return [str(address) for address in addresses]
+
+
 def _is_success(result: ProbeResult | None) -> bool:
     return result is not None and result.status == ProbeStatus.success
+
+
+def _duration_ms(result: ProbeResult | None) -> int:
+    return result.duration_ms if result and result.duration_ms is not None else 0
 
 
 def _is_ip_address(value: str) -> bool:
@@ -320,3 +608,12 @@ def _validate_port(port: int) -> int:
     if port < 1 or port > 65535:
         raise ValueError(f"invalid TCP port: {port}")
     return port
+
+
+def _first_port(ports: list[int] | tuple[int, ...]) -> int:
+    normalized = normalize_ports(ports)
+    return normalized[0]
+
+
+def _raise_invalid_port(value: str) -> int:
+    raise ValueError(f"invalid TCP port: {value}")

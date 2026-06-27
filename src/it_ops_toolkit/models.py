@@ -58,7 +58,7 @@ class ProbeResult(BaseModel):
     id: str
     request_id: str | None = None
     task_id: str
-    probe_type: Literal["ping", "dns", "tcp", "http"]
+    probe_type: Literal["ping", "dns", "tcp", "http", "tls_cert"]
     target: Target
     status: ProbeStatus
     started_at: datetime
@@ -82,6 +82,9 @@ class Asset(BaseModel):
     last_seen: datetime
     status: Literal["active", "missing", "unknown"] = "active"
     source: str = "asset_scan"
+    owner: str | None = None
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
 
 
 class LocalInterface(BaseModel):
@@ -115,6 +118,10 @@ class TaskRun(BaseModel):
     id: str
     task_type: Literal[
         "asset_scan",
+        "asset_diff",
+        "asset_import_notes",
+        "automation",
+        "health_matrix",
         "health_check",
         "diagnosis",
         "security_check",
@@ -130,6 +137,7 @@ class TaskRun(BaseModel):
     target_refs: list[str] = Field(default_factory=list)
     result_refs: list[str] = Field(default_factory=list)
     log_refs: list[str] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class Report(BaseModel):

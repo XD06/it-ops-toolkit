@@ -60,7 +60,7 @@ $env:PYTHONPATH='src'
 python -m unittest discover -s tests
 ```
 
-结果：31 个测试通过。
+结果：76 个测试通过。
 
 ## 已实现能力
 
@@ -86,6 +86,8 @@ python -m unittest discover -s tests
 - `ops asset list`：查看资产列表。
 - `ops asset show`：查看单个资产详情。
 - `ops asset export`：导出当前资产清单，支持 CSV 和 JSON。
+- `ops asset diff`：执行只读资产变化对比，发现新增设备、未出现设备和新增开放端口。
+- `ops asset import-notes`：从 CSV 导入资产负责人、用途、类型、描述和标签，不覆盖扫描端口和发现时间。
 
 ### 巡检与诊断
 
@@ -93,6 +95,9 @@ python -m unittest discover -s tests
 - `ops diagnose internet`：诊断本机基础互联网连通性。
 - `ops diagnose intranet`：诊断内网系统打不开。
 - `ops diagnose rdp`：诊断远程桌面连不上，只做 DNS、Ping、TCP 端口检查，不尝试登录。
+- `ops diagnose printer`：诊断打印机不可达，只做 DNS、Ping、TCP 端口检查，不发送打印任务、不登录后台、不改配置。
+- `ops diagnose dns`：诊断 DNS 解析结果和可选 TCP 端口，只读检查解析结果、期望 IP 和端口可达性。
+- `ops diagnose slow-network`：诊断网络慢的基础链路耗时，只做 Ping、DNS、HTTP/HTTPS 只读检查。
 
 ### 本机信息采集
 
@@ -103,60 +108,58 @@ python -m unittest discover -s tests
 ### 安全与报告
 
 - `ops security check`：基于已发现资产检查高风险端口。
+- `ops security cert-check`：只读检查 TLS 证书过期和即将过期风险。
 - `ops report generate`：基于任务生成 Markdown、CSV、JSON 报告。
 - `ops export bundle`：导出诊断包，包含任务、资产、探测结果、风险发现、本机快照和摘要。
+
+### 自动化动作
+
+- `ops automate flush-dns`：低风险本机动作，默认 dry-run，显式 `--confirm` 才清理本机 DNS 缓存。
+
+### 巡检批量工具
+
+- `ops health tcp-matrix`：从 CSV 批量读取 TCP 目标，逐行执行端口可达性测试。
+- `ops health http-matrix`：从 CSV 批量读取 HTTP/HTTPS 目标，逐行执行可达性测试，支持只读方法 `GET` 和 `HEAD`。
 
 ## 当前尚未开始但已规划的能力
 
 这些方向适合继续按小切片推进：
 
-- 打印机不可达诊断：`ops diagnose printer`。
-- DNS 异常专项诊断：例如解析指定域名、查看系统 DNS、对比多个 DNS 服务器。
+- DNS 深化诊断：例如查看系统 DNS、对比多个 DNS 服务器、记录解析耗时趋势。
 - 网络慢的基础诊断：延迟、丢包、DNS 耗时、HTTP 耗时分解。
-- 证书过期检查。
-- 新开放端口检测或资产变化对比。
-- CSV 导入资产备注、负责人、资产类型。
-- 低风险自动化动作，例如清理 DNS 缓存，但必须先设计风险边界。
+- 自动化动作审计深化：例如记录更明确的执行人、确认来源和审批占位字段。
+- 自动化动作审计深化：例如记录更明确的执行人、确认来源和审批占位字段。
 
 ## 当前推荐下一步
 
-建议从 `ops diagnose printer` 开始接手。
+建议继续做“批量 HTTP matrix”的状态码规则切片，例如支持每行配置期望状态码范围。
 
 理由：
 
-- 打印机问题是桌面运维中非常高频的问题。
-- 只读检查即可产生明显价值。
-- 可以复用现有 DNS、Ping、TCP Probe。
-- 不需要引入新依赖或复杂协议。
+- 中小企业经常需要批量确认一组内网系统、业务 URL、云服务入口是否可达。
+- 这是只读能力，风险低，能复用现有 HTTP Probe、TaskRun、报告和导出链路。
+- 结果可以直接用于巡检、交接、故障复盘和后续 Web 表格展示。
 
 建议第一版范围：
 
-- 命令：`ops diagnose printer --target <ip-or-hostname>`。
-- 可选端口：默认检查 `9100`、`515`、`631`，允许 `--ports 9100,515,631`。
-- 检查步骤：
-  - 如果目标是主机名，先做 DNS。
-  - Ping 目标。
-  - TCP 检查常见打印端口。
-  - 输出结论：DNS 异常、目标不可达、端口都不可达、至少一个打印端口可达。
-- 不做内容：
-  - 不发送打印任务。
-  - 不登录打印机后台。
-  - 不修改驱动、端口、队列或打印机配置。
-
-推荐修改文件：
-
-- `src/it_ops_toolkit/diagnosis.py`
-- `src/it_ops_toolkit/cli.py`
-- `tests/test_diagnosis.py`
-- `README.md`
-- `docs/cli-command-design.md`
+- 命令：`ops health http-matrix --file targets.csv`。
+- CSV 字段：`name`、`url`、`method`、`expected_status`、`owner`、`description`。
+- 行为：只做 HTTP/HTTPS 可达性检查。
+- 输出：每行目标的状态、耗时、HTTP 状态码、期望命中情况、错误摘要，并保存任务。
+- 不做内容：不登录服务、不发送业务请求、不修改配置。
 
 推荐验证：
 
 ```powershell
 $env:PYTHONPATH='src'
-python -m unittest tests.test_diagnosis
 python -m unittest discover -s tests
+python -m it_ops_toolkit asset diff --help
+python -m it_ops_toolkit asset import-notes --help
+python -m it_ops_toolkit automate flush-dns --help
+python -m it_ops_toolkit health tcp-matrix --help
+python -m it_ops_toolkit health http-matrix --help
+python -m it_ops_toolkit diagnose slow-network --help
+python -m it_ops_toolkit diagnose dns --help
 python -m it_ops_toolkit diagnose printer --help
 ```
 

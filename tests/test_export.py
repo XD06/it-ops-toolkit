@@ -26,6 +26,14 @@ class ExportTests(unittest.TestCase):
             now = datetime.now(UTC)
             task = new_task_run(task_type="health_check")
             task = finish_task_run(task, status=TaskStatus.success)
+            task = task.model_copy(
+                update={
+                    "summary": {
+                        "title": "至少一个打印端口可达",
+                        "likely_area": "基础网络路径和打印服务端口正常",
+                    }
+                }
+            )
             result = ProbeResult(
                 id="probe-dns-localhost",
                 task_id=task.id,
@@ -67,6 +75,7 @@ class ExportTests(unittest.TestCase):
             self.assertTrue(bundle.exists())
             with zipfile.ZipFile(bundle) as archive:
                 names = set(archive.namelist())
+                summary = archive.read("summary.md").decode("utf-8")
 
             self.assertIn("summary.md", names)
             self.assertIn("config-summary.json", names)
@@ -75,6 +84,8 @@ class ExportTests(unittest.TestCase):
             self.assertIn("findings.json", names)
             self.assertIn("local-snapshots.json", names)
             self.assertIn("probe-results.json", names)
+            self.assertIn("任务摘要", summary)
+            self.assertIn("至少一个打印端口可达", summary)
 
 
 if __name__ == "__main__":

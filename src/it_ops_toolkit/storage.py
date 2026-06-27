@@ -35,7 +35,8 @@ CREATE TABLE IF NOT EXISTS task_runs (
     ended_at TEXT,
     target_refs TEXT NOT NULL,
     result_refs TEXT NOT NULL,
-    log_refs TEXT NOT NULL
+    log_refs TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE INDEX IF NOT EXISTS idx_task_runs_started_at
@@ -53,7 +54,10 @@ CREATE TABLE IF NOT EXISTS assets (
     first_seen TEXT NOT NULL,
     last_seen TEXT NOT NULL,
     status TEXT NOT NULL,
-    source TEXT NOT NULL
+    source TEXT NOT NULL,
+    owner TEXT,
+    description TEXT,
+    tags TEXT NOT NULL DEFAULT '[]'
 );
 
 CREATE INDEX IF NOT EXISTS idx_assets_ip
@@ -151,6 +155,30 @@ class SQLiteStore:
     def ensure_schema(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA_SQL)
+        self._ensure_task_runs_summary_column()
+        self._ensure_asset_notes_columns()
+
+    def _ensure_task_runs_summary_column(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(task_runs)").fetchall()
+            if any(column[1] == "summary" for column in columns):
+                return
+            connection.execute(
+                "ALTER TABLE task_runs ADD COLUMN summary TEXT NOT NULL DEFAULT '{}'"
+            )
+
+    def _ensure_asset_notes_columns(self) -> None:
+        with self.connect() as connection:
+            columns = connection.execute("PRAGMA table_info(assets)").fetchall()
+            column_names = {column[1] for column in columns}
+            if "owner" not in column_names:
+                connection.execute("ALTER TABLE assets ADD COLUMN owner TEXT")
+            if "description" not in column_names:
+                connection.execute("ALTER TABLE assets ADD COLUMN description TEXT")
+            if "tags" not in column_names:
+                connection.execute(
+                    "ALTER TABLE assets ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'"
+                )
 
     def save_task_run(self, task: TaskRun) -> None:
         self.ensure_schema()
@@ -168,8 +196,9 @@ class SQLiteStore:
                     ended_at,
                     target_refs,
                     result_refs,
-                    log_refs
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    log_refs,
+                    summary
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     task.id,
@@ -183,11 +212,13 @@ class SQLiteStore:
                     json.dumps(task.target_refs, ensure_ascii=False),
                     json.dumps(task.result_refs, ensure_ascii=False),
                     json.dumps(task.log_refs, ensure_ascii=False),
+                    json.dumps(task.summary, ensure_ascii=False),
                 ),
             )
 
     def list_task_runs(self, *, limit: int = 20) -> list[TaskRun]:
         self.ensure_schema()
+        self._ensure_task_runs_summary_column()
         with self.connect() as connection:
             rows = connection.execute(
                 """
@@ -201,6 +232,7 @@ class SQLiteStore:
 
     def get_task_run(self, task_id: str) -> TaskRun:
         self.ensure_schema()
+        self._ensure_task_runs_summary_column()
         with self.connect() as connection:
             row = connection.execute(
                 "SELECT * FROM task_runs WHERE id = ?",
@@ -215,6 +247,13 @@ class SQLiteStore:
         self.ensure_schema()
         existing = self.get_asset_by_ip(asset.ip)
         first_seen = existing.first_seen if existing else asset.first_seen
+        owner = asset.owner if asset.owner is not None else existing.owner if existing else None
+        description = (
+            asset.description
+            if asset.description is not None
+            else existing.description if existing else None
+        )
+        tags = asset.tags if asset.tags else existing.tags if existing else []
         with self.connect() as connection:
             connection.execute(
                 """
@@ -230,8 +269,11 @@ class SQLiteStore:
                     first_seen,
                     last_seen,
                     status,
-                    source
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source,
+                    owner,
+                    description,
+                    tags
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     asset.id,
@@ -246,6 +288,9 @@ class SQLiteStore:
                     asset.last_seen.isoformat(),
                     asset.status,
                     asset.source,
+                    owner,
+                    description,
+                    json.dumps(tags, ensure_ascii=False),
                 ),
             )
 
@@ -492,6 +537,7 @@ class SQLiteStore:
             target_refs=json.loads(values["target_refs"]),
             result_refs=json.loads(values["result_refs"]),
             log_refs=json.loads(values["log_refs"]),
+            summary=json.loads(values["summary"]) if values.get("summary") else {},
         )
 
     def _row_to_asset(self, row: sqlite3.Row) -> Asset:
@@ -509,6 +555,9 @@ class SQLiteStore:
             last_seen=values["last_seen"],
             status=values["status"],
             source=values["source"],
+            owner=values.get("owner"),
+            description=values.get("description"),
+            tags=json.loads(values["tags"]) if values.get("tags") else [],
         )
 
     def _row_to_local_snapshot(self, row: sqlite3.Row) -> LocalSnapshot:

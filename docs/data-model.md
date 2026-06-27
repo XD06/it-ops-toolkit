@@ -66,6 +66,9 @@ Asset 表示已发现资产。
 | `last_seen` | 最近发现时间 |
 | `status` | `active`、`missing`、`unknown` |
 | `source` | 发现来源 |
+| `owner` | 负责人 |
+| `description` | 备注或用途说明 |
+| `tags` | 标签 |
 
 ## LocalSnapshot
 
@@ -133,7 +136,7 @@ TaskRun 表示一次任务执行。
 | 字段 | 说明 |
 |---|---|
 | `id` | 任务 ID |
-| `task_type` | `asset_scan`、`health_check`、`diagnosis`、`security_check`、`ops_collect`、`report_generate` |
+| `task_type` | `asset_scan`、`asset_diff`、`asset_import_notes`、`automation`、`health_check`、`diagnosis`、`security_check`、`ops_collect`、`report_generate` |
 | `requested_by` | 执行人或执行来源 |
 | `source` | `cli`、`web`、`scheduler`、`agent` |
 | `status` | `pending`、`running`、`success`、`failed`、`cancelled` |
