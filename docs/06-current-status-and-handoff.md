@@ -32,7 +32,7 @@
 
 ## 当前仓库状态
 
-最近确认时间：2026-06-13。
+最近确认时间：2026-06-27。
 
 当前分支：`master`。
 
@@ -60,7 +60,7 @@ $env:PYTHONPATH='src'
 python -m unittest discover -s tests
 ```
 
-结果：76 个测试通过。
+结果：99 个测试通过。
 
 ## 已实现能力
 
@@ -74,10 +74,11 @@ python -m unittest discover -s tests
 
 ### Probe / Adapter
 
-- Ping Probe。
+- Ping Probe，解析 ping 输出提取延迟（min/avg/max RTT）和丢包率统计，支持 Windows 和 Linux 格式。
 - DNS Probe，当前使用系统解析器。
 - TCP Probe。
 - HTTP Probe。
+- TLS Certificate Probe。
 
 ### 资产与拓扑基础
 
@@ -97,7 +98,7 @@ python -m unittest discover -s tests
 - `ops diagnose rdp`：诊断远程桌面连不上，只做 DNS、Ping、TCP 端口检查，不尝试登录。
 - `ops diagnose printer`：诊断打印机不可达，只做 DNS、Ping、TCP 端口检查，不发送打印任务、不登录后台、不改配置。
 - `ops diagnose dns`：诊断 DNS 解析结果和可选 TCP 端口，只读检查解析结果、期望 IP 和端口可达性。
-- `ops diagnose slow-network`：诊断网络慢的基础链路耗时，只做 Ping、DNS、HTTP/HTTPS 只读检查。
+- `ops diagnose slow-network`：诊断网络慢的基础链路耗时，基于 Ping RTT 和丢包率、DNS 耗时、HTTP 耗时分解判断，只做只读检查。
 
 ### 本机信息采集
 
@@ -126,41 +127,41 @@ python -m unittest discover -s tests
 这些方向适合继续按小切片推进：
 
 - DNS 深化诊断：例如查看系统 DNS、对比多个 DNS 服务器、记录解析耗时趋势。
-- 网络慢的基础诊断：延迟、丢包、DNS 耗时、HTTP 耗时分解。
 - 自动化动作审计深化：例如记录更明确的执行人、确认来源和审批占位字段。
-- 自动化动作审计深化：例如记录更明确的执行人、确认来源和审批占位字段。
+
+## 最近完成的切片
+
+### Ping Probe 增强：延迟和丢包统计（2026-06-27）
+
+- 增强 `ping_host` 探针，解析 ping 输出提取 `packets_sent`、`packets_received`、`packets_lost`、`packet_loss_percent`、`min_rtt_ms`、`avg_rtt_ms`、`max_rtt_ms`。
+- 支持 Windows（`Packets: Sent =` 格式）和 Linux/macOS（`packets transmitted` 格式）两种输出。
+- 更新 `classify_slow_network_diagnosis`：用 `avg_rtt_ms` 替代 `duration_ms` 判断网络延迟，新增高丢包率分类（阈值 20%），延迟阈值从 1000ms（进程总耗时）调整为 200ms（实际 RTT）。
+- 新增 13 个单元测试覆盖解析和诊断逻辑。
+
+### 批量 HTTP Matrix 状态码比对（2026-06-27）
+
+- `ops health http-matrix` 支持 `expected_status` 期望状态码比对。
+- CSV 字段新增 `expected_status`，支持单个码（`200`）、范围（`200-299`）和多值（`301,302`）。
+- 报告渲染区分 TCP 和 HTTP matrix，HTTP matrix 显示 HTTP 状态码、期望状态码和匹配结果。
 
 ## 当前推荐下一步
 
-建议继续做“批量 HTTP matrix”的状态码规则切片，例如支持每行配置期望状态码范围。
+建议继续做 DNS 深化诊断，例如对比多个 DNS 服务器解析结果。
 
 理由：
 
-- 中小企业经常需要批量确认一组内网系统、业务 URL、云服务入口是否可达。
-- 这是只读能力，风险低，能复用现有 HTTP Probe、TaskRun、报告和导出链路。
-- 结果可以直接用于巡检、交接、故障复盘和后续 Web 表格展示。
-
-建议第一版范围：
-
-- 命令：`ops health http-matrix --file targets.csv`。
-- CSV 字段：`name`、`url`、`method`、`expected_status`、`owner`、`description`。
-- 行为：只做 HTTP/HTTPS 可达性检查。
-- 输出：每行目标的状态、耗时、HTTP 状态码、期望命中情况、错误摘要，并保存任务。
-- 不做内容：不登录服务、不发送业务请求、不修改配置。
+- 中小企业经常需要对比内网 DNS 和公共 DNS 的解析结果差异，判断是否 DNS 配置问题。
+- 这是只读能力，风险低，能复用现有 DNS Probe、TaskRun、报告和导出链路。
+- 可以进一步细化 `ops diagnose dns` 场景，增加多 DNS 服务器对比。
 
 推荐验证：
 
 ```powershell
 $env:PYTHONPATH='src'
-python -m unittest discover -s tests
-python -m it_ops_toolkit asset diff --help
-python -m it_ops_toolkit asset import-notes --help
-python -m it_ops_toolkit automate flush-dns --help
-python -m it_ops_toolkit health tcp-matrix --help
-python -m it_ops_toolkit health http-matrix --help
+python -m pytest tests/ -v
 python -m it_ops_toolkit diagnose slow-network --help
 python -m it_ops_toolkit diagnose dns --help
-python -m it_ops_toolkit diagnose printer --help
+python -m it_ops_toolkit health http-matrix --help
 ```
 
 ## 注意事项

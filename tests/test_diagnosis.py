@@ -124,6 +124,57 @@ class DiagnosisTests(unittest.TestCase):
 
         self.assertEqual(summary.title, "HTTP/HTTPS 响应耗时偏高")
 
+    def test_classifies_high_packet_loss(self) -> None:
+        results = [
+            _result(
+                "ping",
+                "223.5.5.5",
+                ProbeStatus.success,
+                duration_ms=40,
+                observations={"packet_loss_percent": 50.0, "avg_rtt_ms": 30.0},
+            ),
+            _result("dns", "www.baidu.com", ProbeStatus.success, duration_ms=80),
+            _result("http", "https://www.baidu.com", ProbeStatus.success, duration_ms=300),
+        ]
+
+        summary = classify_slow_network_diagnosis(results)
+
+        self.assertEqual(summary.title, "基础链路丢包率偏高")
+
+    def test_classifies_high_rtt_latency(self) -> None:
+        results = [
+            _result(
+                "ping",
+                "223.5.5.5",
+                ProbeStatus.success,
+                duration_ms=600,
+                observations={"avg_rtt_ms": 350.0, "packet_loss_percent": 0.0},
+            ),
+            _result("dns", "www.baidu.com", ProbeStatus.success, duration_ms=80),
+            _result("http", "https://www.baidu.com", ProbeStatus.success, duration_ms=400),
+        ]
+
+        summary = classify_slow_network_diagnosis(results)
+
+        self.assertEqual(summary.title, "基础网络延迟偏高")
+
+    def test_slow_network_normal_with_rtt_observations(self) -> None:
+        results = [
+            _result(
+                "ping",
+                "223.5.5.5",
+                ProbeStatus.success,
+                duration_ms=35,
+                observations={"avg_rtt_ms": 15.0, "packet_loss_percent": 0.0},
+            ),
+            _result("dns", "www.baidu.com", ProbeStatus.success, duration_ms=80),
+            _result("http", "https://www.baidu.com", ProbeStatus.success, duration_ms=300),
+        ]
+
+        summary = classify_slow_network_diagnosis(results)
+
+        self.assertEqual(summary.title, "基础延迟检查正常")
+
     def test_parse_service_url_uses_default_https_port(self) -> None:
         parsed = parse_service_url("https://intranet.example.local/path")
 

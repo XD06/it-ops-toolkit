@@ -16,6 +16,8 @@ DEFAULT_RDP_PORT = 3389
 DEFAULT_PRINTER_PORTS = (9100, 515, 631)
 SLOW_DNS_THRESHOLD_MS = 500
 SLOW_NETWORK_THRESHOLD_MS = 1000
+SLOW_PING_RTT_THRESHOLD_MS = 200
+PACKET_LOSS_THRESHOLD_PERCENT = 20.0
 
 
 @dataclass(frozen=True)
@@ -158,7 +160,16 @@ def classify_slow_network_diagnosis(results: list[ProbeResult]) -> DiagnosisSumm
             likely_area="DNS 服务性能、DNS 转发链路、上游解析或安全设备检查",
             recommendation="检查本机 DNS、内网 DNS 服务负载、转发器、上游 DNS 和安全设备 DNS 检查策略。",
         )
-    if _duration_ms(ping_result) >= SLOW_NETWORK_THRESHOLD_MS:
+    packet_loss = _ping_packet_loss_percent(ping_result)
+    if packet_loss is not None and packet_loss >= PACKET_LOSS_THRESHOLD_PERCENT:
+        return DiagnosisSummary(
+            title="基础链路丢包率偏高",
+            likely_area="无线信号、网线/交换机端口、链路拥塞、跨网段路由或出口链路质量",
+            recommendation="对比同网段其他终端丢包率，检查无线信号强度、网线和交换机端口、出口带宽和运营商链路质量。",
+        )
+    ping_rtt = _ping_avg_rtt_ms(ping_result)
+    ping_latency = ping_rtt if ping_rtt is not None else _duration_ms(ping_result)
+    if ping_latency >= SLOW_PING_RTT_THRESHOLD_MS:
         return DiagnosisSummary(
             title="基础网络延迟偏高",
             likely_area="无线质量、链路拥塞、跨网段路由、出口链路或运营商网络",
@@ -594,6 +605,30 @@ def _is_success(result: ProbeResult | None) -> bool:
 
 def _duration_ms(result: ProbeResult | None) -> int:
     return result.duration_ms if result and result.duration_ms is not None else 0
+
+
+def _ping_avg_rtt_ms(result: ProbeResult | None) -> float | None:
+    if result is None:
+        return None
+    value = result.observations.get("avg_rtt_ms")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ping_packet_loss_percent(result: ProbeResult | None) -> float | None:
+    if result is None:
+        return None
+    value = result.observations.get("packet_loss_percent")
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _is_ip_address(value: str) -> bool:
