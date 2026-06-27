@@ -60,7 +60,7 @@ $env:PYTHONPATH='src'
 python -m unittest discover -s tests
 ```
 
-结果：137 个测试通过。
+结果：159 个测试通过。
 
 ## 已实现能力
 
@@ -125,12 +125,14 @@ python -m unittest discover -s tests
 ### Web Console
 
 - `ops web run`：启动 Web Console 服务（FastAPI + Uvicorn），默认监听 `127.0.0.1:8080`。
-- 仪表盘首页：概览统计（资产数、任务数、报告数、发现项数、严重程度分布、任务类型分布）。
+- 仪表盘首页：概览统计（资产数、任务数、报告数、发现项数、严重程度分布、任务类型分布）、手动任务触发按钮（巡检和扫描）。
 - 资产列表页：表格展示所有资产，点击 IP 查看详情弹窗。
-- 任务历史页：表格展示最近任务，点击任务 ID 查看详情（含探测结果和发现项）。
+- 任务历史页：表格展示最近任务，支持按类型和状态筛选，点击任务 ID 查看详情（含探测结果和发现项）。
 - 报告页：报告列表，点击查看报告文件内容。
-- REST API：`/api/overview`、`/api/assets`、`/api/assets/{ip}`、`/api/tasks`、`/api/tasks/{id}`、`/api/tasks/{id}/results`、`/api/tasks/{id}/findings`、`/api/tasks/{id}/snapshots`、`/api/reports`、`/api/reports/{id}`、`/api/reports/{id}/content`、`/api/health`。
-- Web Console 只读调用 `SQLiteStore`，不直接调用 Adapter，不承载业务判断逻辑。
+- 配置页：查看当前应用配置、巡检配置和扫描配置详情。
+- REST API：`/api/overview`、`/api/assets`、`/api/assets/{ip}`、`/api/tasks`（支持 `task_type` 和 `status` 筛选）、`/api/tasks/{id}`、`/api/tasks/{id}/results`、`/api/tasks/{id}/findings`、`/api/tasks/{id}/snapshots`、`/api/tasks/trigger/health-check`（POST）、`/api/tasks/trigger/asset-scan`（POST）、`/api/reports`、`/api/reports/{id}`、`/api/reports/{id}/content`、`/api/config`、`/api/config/health-profiles`、`/api/config/scan-profiles`、`/api/health`。
+- Web Console 调用 `SQLiteStore` 和领域服务函数（`run_health_check`、`run_asset_scan`），不直接调用 Adapter。
+- 手动触发任务以 `source="web"` 记录，方便区分 CLI 和 Web 来源。
 - 自动生成 OpenAPI 文档（`/docs`）。
 
 ## 当前尚未开始但已规划的能力
@@ -141,6 +143,24 @@ python -m unittest discover -s tests
 - 自动化动作审计深化：例如记录更明确的执行人、确认来源和审批占位字段。
 
 ## 最近完成的切片
+
+### Web Console 深化：手动触发、配置查看和任务筛选（2026-06-27）
+
+- 新增配置注入机制：`set_config()` 和 `get_config()`，CLI `ops web run` 启动时注入 `OpsConfig` 实例。
+- 新增手动任务触发端点：
+  - `POST /api/tasks/trigger/health-check`：通过 `run_health_check` 领域服务触发巡检。
+  - `POST /api/tasks/trigger/asset-scan`：通过 `run_asset_scan` 领域服务触发资产扫描。
+  - 触发的任务以 `source="web"`、`requested_by="web"` 记录。
+  - 任务失败时自动标记 `failed` 状态并返回错误详情。
+- 新增配置查看端点：`GET /api/config`、`GET /api/config/health-profiles`、`GET /api/config/scan-profiles`。
+- 未注入配置时配置端点返回 503，概览端点返回 `config_available: false`。
+- 任务列表新增筛选参数：`task_type` 和 `status` 查询参数。
+- 仪表盘增强：
+  - 概览页新增手动触发栏（选择巡检/扫描配置后点击按钮执行）。
+  - 任务历史页新增类型和状态筛选下拉框。
+  - 新增配置页（展示应用配置、巡检配置和扫描配置详情）。
+  - 新增 Toast 提示组件（成功/错误反馈）。
+- 新增 22 个单元测试覆盖筛选、配置查看和任务触发场景（使用 mock 隔离实际网络操作）。
 
 ### Phase 4: Web Console MVP（2026-06-27）
 
@@ -181,20 +201,21 @@ python -m unittest discover -s tests
 
 ## 当前推荐下一步
 
-Phase 4: Web Console MVP 已完成。建议继续深化 Web Console 或推进 Phase 5: AI 运维助手。
+Web Console 深化（手动触发、配置查看、任务筛选）已完成。建议推进 Phase 5: AI 运维助手或继续深化 Web Console。
 
-方向一：深化 Web Console
-
-- 增加手动任务触发（在 Web 界面点击按钮触发巡检或扫描）。
-- 增加配置查看页面。
-- 增加任务筛选和搜索。
-- 增加资产变化趋势可视化。
-
-方向二：Phase 5: AI 运维助手
+方向一：Phase 5: AI 运维助手
 
 - 定义 AI 输入数据结构。
 - 让 AI 基于结构化巡检结果生成总结和建议。
 - AI 输出区分事实、推断和建议。
+- AI 不默认执行高风险动作。
+
+方向二：继续深化 Web Console
+
+- 增加诊断和报告生成触发（当前仅支持巡检和扫描）。
+- 增加资产变化趋势可视化。
+- 增加任务搜索（按关键词、时间范围）。
+- 增加 WebSocket 实时任务进度推送。
 
 方向三：继续深化诊断能力
 

@@ -6,14 +6,11 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 from ..storage import SQLiteStore
 
 
-def render_dashboard(store: SQLiteStore) -> str:
+def render_dashboard(store: SQLiteStore, *, config_available: bool = False) -> str:
     """渲染仪表盘 HTML 页面。"""
-    # 预取概览数据用于服务端渲染首屏
     assets = store.list_assets()
     tasks = store.list_task_runs(limit=20)
     reports = store.list_reports(limit=20)
@@ -24,6 +21,7 @@ def render_dashboard(store: SQLiteStore) -> str:
         tasks_count=len(tasks),
         reports_count=len(reports),
         findings_count=len(findings),
+        config_available="true" if config_available else "false",
     )
 
 
@@ -67,15 +65,8 @@ header {{
   top: 0;
   z-index: 100;
 }}
-header h1 {{
-  font-size: 18px;
-  font-weight: 600;
-  color: var(--accent);
-}}
-header .meta {{
-  font-size: 13px;
-  color: var(--text-dim);
-}}
+header h1 {{ font-size: 18px; font-weight: 600; color: var(--accent); }}
+header .meta {{ font-size: 13px; color: var(--text-dim); }}
 nav {{
   display: flex;
   gap: 4px;
@@ -94,10 +85,7 @@ nav button {{
   transition: all 0.15s;
 }}
 nav button:hover {{ color: var(--text); }}
-nav button.active {{
-  color: var(--accent);
-  border-bottom-color: var(--accent);
-}}
+nav button.active {{ color: var(--accent); border-bottom-color: var(--accent); }}
 .container {{ padding: 24px; max-width: 1400px; margin: 0 auto; }}
 .stats-grid {{
   display: grid;
@@ -209,25 +197,106 @@ pre {{
   white-space: pre-wrap;
   word-break: break-all;
 }}
+.toolbar {{
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}}
+.toolbar select, .toolbar input {{
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 13px;
+}}
+.toolbar select:focus, .toolbar input:focus {{
+  outline: none;
+  border-color: var(--accent);
+}}
+.btn {{
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 16px;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s;
+}}
+.btn:hover {{ background: var(--accent-dim); }}
+.btn:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+.btn-success {{ background: var(--green); }}
+.btn-success:hover {{ opacity: 0.85; }}
+.trigger-bar {{
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 24px;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}}
+.trigger-bar select {{
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  padding: 6px 10px;
+  font-size: 13px;
+}}
+.trigger-bar select:focus {{ outline: none; border-color: var(--accent); }}
+.toast {{
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  font-size: 14px;
+  z-index: 300;
+  display: none;
+  max-width: 400px;
+}}
+.toast.success {{ border-color: var(--green); color: var(--green); }}
+.toast.error {{ border-color: var(--red); color: var(--red); }}
+.toast.active {{ display: block; }}
 </style>
 </head>
 <body>
 
 <header>
   <h1>IT Ops Toolkit</h1>
-  <span class="meta">Web Console MVP</span>
+  <span class="meta">Web Console</span>
 </header>
 
 <nav>
-  <button class="active" onclick="showSection('overview')">概览</button>
-  <button onclick="showSection('assets')">资产列表</button>
-  <button onclick="showSection('tasks')">任务历史</button>
-  <button onclick="showSection('reports')">报告</button>
+  <button class="active" onclick="showSection('overview', event)">概览</button>
+  <button onclick="showSection('assets', event)">资产列表</button>
+  <button onclick="showSection('tasks', event)">任务历史</button>
+  <button onclick="showSection('reports', event)">报告</button>
+  <button onclick="showSection('config', event)">配置</button>
 </nav>
 
 <div class="container">
   <!-- 概览 -->
   <div id="section-overview" class="section active">
+    <div class="trigger-bar" id="trigger-bar" style="display:none;">
+      <span style="font-size:14px;font-weight:600;color:var(--text-dim);">手动触发：</span>
+      <select id="trigger-health-profile">
+        <option value="">选择巡检配置...</option>
+      </select>
+      <button class="btn btn-success" onclick="triggerHealthCheck()">执行巡检</button>
+      <select id="trigger-scan-profile">
+        <option value="">选择扫描配置...</option>
+      </select>
+      <button class="btn" onclick="triggerAssetScan()">执行扫描</button>
+    </div>
     <div class="stats-grid">
       <div class="stat-card">
         <div class="label">资产总数</div>
@@ -273,6 +342,27 @@ pre {{
 
   <!-- 任务历史 -->
   <div id="section-tasks" class="section">
+    <div class="toolbar">
+      <select id="filter-task-type" onchange="loadTasks()">
+        <option value="">全部类型</option>
+        <option value="asset_scan">资产扫描</option>
+        <option value="health_check">巡检</option>
+        <option value="diagnosis">诊断</option>
+        <option value="security_check">安全检查</option>
+        <option value="report_generate">报告生成</option>
+        <option value="ops_collect">本机采集</option>
+        <option value="automation">自动化动作</option>
+        <option value="health_matrix">健康矩阵</option>
+      </select>
+      <select id="filter-task-status" onchange="loadTasks()">
+        <option value="">全部状态</option>
+        <option value="success">成功</option>
+        <option value="failed">失败</option>
+        <option value="running">运行中</option>
+        <option value="pending">等待中</option>
+        <option value="cancelled">已取消</option>
+      </select>
+    </div>
     <table id="tasks-table">
       <thead>
         <tr>
@@ -311,6 +401,13 @@ pre {{
       </tbody>
     </table>
   </div>
+
+  <!-- 配置 -->
+  <div id="section-config" class="section">
+    <div id="config-content">
+      <p class="loading">加载中...</p>
+    </div>
+  </div>
 </div>
 
 <!-- 详情弹窗 -->
@@ -322,7 +419,12 @@ pre {{
   </div>
 </div>
 
+<!-- 提示框 -->
+<div class="toast" id="toast"></div>
+
 <script>
+const CONFIG_AVAILABLE = {config_available};
+
 const TASK_TYPE_LABELS = {{
   asset_scan: "资产扫描",
   asset_diff: "资产变化对比",
@@ -344,21 +446,32 @@ const SEVERITY_LABELS = {{
   critical: "严重",
 }};
 
-function showSection(name) {{
+function showSection(name, event) {{
   document.querySelectorAll(".section").forEach(s => s.classList.remove("active"));
   document.querySelectorAll("nav button").forEach(b => b.classList.remove("active"));
   document.getElementById("section-" + name).classList.add("active");
-  event.target.classList.add("active");
+  if (event) event.target.classList.add("active");
   if (name === "overview") loadOverview();
   if (name === "assets") loadAssets();
   if (name === "tasks") loadTasks();
   if (name === "reports") loadReports();
+  if (name === "config") loadConfig();
 }}
 
-async function fetchJSON(url) {{
-  const resp = await fetch(url);
-  if (!resp.ok) throw new Error(`HTTP ${{resp.status}}`);
+async function fetchJSON(url, options) {{
+  const resp = await fetch(url, options);
+  if (!resp.ok) {{
+    const data = await resp.json().catch(() => ({{}}));
+    throw new Error(data.detail || `HTTP ${{resp.status}}`);
+  }}
   return resp.json();
+}}
+
+function showToast(msg, type) {{
+  const toast = document.getElementById("toast");
+  toast.textContent = msg;
+  toast.className = "toast " + (type || "") + " active";
+  setTimeout(() => toast.classList.remove("active"), 4000);
 }}
 
 async function loadOverview() {{
@@ -369,7 +482,11 @@ async function loadOverview() {{
     document.getElementById("stat-reports").textContent = data.reports_count;
     document.getElementById("stat-findings").textContent = data.findings_count;
 
-    // 严重程度统计
+    if (data.config_available) {{
+      document.getElementById("trigger-bar").style.display = "flex";
+      await loadTriggerProfiles();
+    }}
+
     const sevGrid = document.getElementById("severity-grid");
     if (data.severity_counts && Object.keys(data.severity_counts).length > 0) {{
       sevGrid.innerHTML = Object.entries(data.severity_counts).map(([sev, count]) => {{
@@ -382,7 +499,6 @@ async function loadOverview() {{
       sevGrid.innerHTML = "";
     }}
 
-    // 任务类型统计
     const typeGrid = document.getElementById("task-type-grid");
     if (data.task_type_counts && Object.keys(data.task_type_counts).length > 0) {{
       typeGrid.innerHTML = Object.entries(data.task_type_counts).map(([type, count]) => {{
@@ -394,6 +510,57 @@ async function loadOverview() {{
     }}
   }} catch (e) {{
     console.error("load overview failed:", e);
+  }}
+}}
+
+async function loadTriggerProfiles() {{
+  try {{
+    const [healthProfiles, scanProfiles] = await Promise.all([
+      fetchJSON("/api/config/health-profiles"),
+      fetchJSON("/api/config/scan-profiles"),
+    ]));
+    const healthSelect = document.getElementById("trigger-health-profile");
+    healthSelect.innerHTML = '<option value="">选择巡检配置...</option>' +
+      healthProfiles.map(p => `<option value="${{p.name}}">${{p.name}} (${{p.targets.length}}个目标)</option>`).join("");
+    const scanSelect = document.getElementById("trigger-scan-profile");
+    scanSelect.innerHTML = '<option value="">选择扫描配置...</option>' +
+      scanProfiles.map(p => `<option value="${{p.name}}">${{p.name}} (${{p.subnets.length}}个网段)</option>`).join("");
+  }} catch (e) {{
+    console.error("load trigger profiles failed:", e);
+  }}
+}}
+
+async function triggerHealthCheck() {{
+  const profile = document.getElementById("trigger-health-profile").value;
+  if (!profile) {{ showToast("请先选择巡检配置", "error"); return; }}
+  try {{
+    showToast("巡检任务已触发，请稍候...", "success");
+    const task = await fetchJSON("/api/tasks/trigger/health-check", {{
+      method: "POST",
+      headers: {{"Content-Type": "application/json"}},
+      body: JSON.stringify({{profile_name: profile}}),
+    }});
+    showToast(`巡检完成: ${{task.status}} (${{task.id}})`, task.status === "success" ? "success" : "error");
+    loadOverview();
+  }} catch (e) {{
+    showToast("巡检触发失败: " + e.message, "error");
+  }}
+}}
+
+async function triggerAssetScan() {{
+  const profile = document.getElementById("trigger-scan-profile").value;
+  if (!profile) {{ showToast("请先选择扫描配置", "error"); return; }}
+  try {{
+    showToast("资产扫描已触发，请稍候...", "success");
+    const task = await fetchJSON("/api/tasks/trigger/asset-scan", {{
+      method: "POST",
+      headers: {{"Content-Type": "application/json"}},
+      body: JSON.stringify({{profile_name: profile}}),
+    }});
+    showToast(`扫描完成: ${{task.status}} (${{task.id}})`, task.status === "success" ? "success" : "error");
+    loadOverview();
+  }} catch (e) {{
+    showToast("扫描触发失败: " + e.message, "error");
   }}
 }}
 
@@ -432,7 +599,12 @@ async function loadAssets() {{
 async function loadTasks() {{
   const tbody = document.getElementById("tasks-body");
   try {{
-    const tasks = await fetchJSON("/api/tasks?limit=50");
+    const typeFilter = document.getElementById("filter-task-type").value;
+    const statusFilter = document.getElementById("filter-task-status").value;
+    let url = "/api/tasks?limit=50";
+    if (typeFilter) url += `&task_type=${{encodeURIComponent(typeFilter)}}`;
+    if (statusFilter) url += `&status=${{encodeURIComponent(statusFilter)}}`;
+    const tasks = await fetchJSON(url);
     if (tasks.length === 0) {{
       tbody.innerHTML = '<tr><td colspan="8" class="empty">暂无任务记录。运行 `ops asset scan` 或 `ops health check` 产生数据。</td></tr>';
       return;
@@ -494,6 +666,66 @@ async function loadReports() {{
   }}
 }}
 
+async function loadConfig() {{
+  const container = document.getElementById("config-content");
+  try {{
+    const config = await fetchJSON("/api/config");
+    let html = `<table>
+      <tr><th>字段</th><th>值</th></tr>
+      <tr><td>应用名称</td><td>${{config.app.name}}</td></tr>
+      <tr><td>环境</td><td>${{config.app.environment}}</td></tr>
+      <tr><td>巡检配置</td><td>${{config.health_profiles.join(", ") || "无"}}</td></tr>
+      <tr><td>扫描配置</td><td>${{config.scan_profiles.join(", ") || "无"}}</td></tr>
+      <tr><td>探针超时(ms)</td><td>${{config.probe_defaults.timeout_ms}}</td></tr>
+      <tr><td>探针重试</td><td>${{config.probe_defaults.retries}}</td></tr>
+      <tr><td>并发数</td><td>${{config.probe_defaults.concurrency}}</td></tr>
+      <tr><td>报告输出目录</td><td class="monospace">${{config.reports.output_dir}}</td></tr>
+      <tr><td>报告格式</td><td>${{config.reports.formats.join(", ")}}</td></tr>
+      <tr><td>存储类型</td><td>${{config.storage.type}}</td></tr>
+      <tr><td>存储路径</td><td class="monospace">${{config.storage.path}}</td></tr>
+      <tr><td>高风险端口</td><td class="monospace">${{config.security.risky_ports.join(", ") || "无"}}</td></tr>
+    </table>`;
+
+    // 加载详细配置
+    const [healthProfiles, scanProfiles] = await Promise.all([
+      fetchJSON("/api/config/health-profiles"),
+      fetchJSON("/api/config/scan-profiles"),
+    ]);
+
+    if (healthProfiles.length > 0) {{
+      html += `<h3 style="margin:20px 0 10px;color:var(--accent);">巡检配置详情</h3>`;
+      for (const p of healthProfiles) {{
+        html += `<table style="margin-bottom:12px;">
+          <tr><th colspan="4">${{p.name}} (${{p.description || "无描述"}})</th></tr>
+          <tr><th>名称</th><th>类型</th><th>值</th><th>检查项</th></tr>
+          ${{p.targets.map(t => `<tr>
+            <td>${{t.name}}</td>
+            <td>${{t.type}}</td>
+            <td class="monospace">${{t.value}}</td>
+            <td>${{t.checks.join(", ")}}</td>
+          </tr>`).join("")}}
+        </table>`;
+      }}
+    }}
+
+    if (scanProfiles.length > 0) {{
+      html += `<h3 style="margin:20px 0 10px;color:var(--accent);">扫描配置详情</h3>`;
+      for (const p of scanProfiles) {{
+        html += `<table style="margin-bottom:12px;">
+          <tr><th colspan="2">${{p.name}} (${{p.description || "无描述"}})</th></tr>
+          <tr><td>网段</td><td class="monospace">${{p.subnets.join(", ")}}</td></tr>
+          <tr><td>Ping</td><td>${{p.ping.enabled ? "启用" : "禁用"}} (超时 ${{p.ping.timeout_ms}}ms, 重试 ${{p.ping.retries}})</td></tr>
+          <tr><td>TCP 端口</td><td class="monospace">${{p.tcp_ports.join(", ") || "无"}}</td></tr>
+        </table>`;
+      }}
+    }}
+
+    container.innerHTML = html;
+  }} catch (e) {{
+    container.innerHTML = `<p class="empty">加载配置失败: ${{e.message}}<br><br>请通过 `ops web run` 启动 Web Console 以加载配置。</p>`;
+  }}
+}}
+
 async function showAssetDetail(ip) {{
   try {{
     const asset = await fetchJSON(`/api/assets/${{encodeURIComponent(ip)}}`);
@@ -521,7 +753,7 @@ async function showAssetDetail(ip) {{
       </table>`;
     document.getElementById("modal-overlay").classList.add("active");
   }} catch (e) {{
-    alert("加载资产详情失败: " + e.message);
+    showToast("加载资产详情失败: " + e.message, "error");
   }}
 }}
 
@@ -531,7 +763,7 @@ async function showTaskDetail(taskId) {{
       fetchJSON(`/api/tasks/${{encodeURIComponent(taskId)}}`),
       fetchJSON(`/api/tasks/${{encodeURIComponent(taskId)}}/results`),
       fetchJSON(`/api/tasks/${{encodeURIComponent(taskId)}}/findings`),
-    ]]);
+    ]);
     const typeLabel = TASK_TYPE_LABELS[task.task_type] || task.task_type;
     document.getElementById("modal-title").textContent = `任务详情: ${{taskId}}`;
 
@@ -582,7 +814,7 @@ async function showTaskDetail(taskId) {{
       ${{findingsHtml}}`;
     document.getElementById("modal-overlay").classList.add("active");
   }} catch (e) {{
-    alert("加载任务详情失败: " + e.message);
+    showToast("加载任务详情失败: " + e.message, "error");
   }}
 }}
 
@@ -596,7 +828,7 @@ async function showReportContent(reportId) {{
       <pre>${{isJson ? JSON.stringify(JSON.parse(data.content), null, 2) : data.content}}</pre>`;
     document.getElementById("modal-overlay").classList.add("active");
   }} catch (e) {{
-    alert("加载报告内容失败: " + e.message);
+    showToast("加载报告内容失败: " + e.message, "error");
   }}
 }}
 

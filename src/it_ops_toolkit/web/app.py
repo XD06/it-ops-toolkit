@@ -1,9 +1,9 @@
 """Web Console FastAPI 应用定义。
 
 架构规则：
-- Web 只调用 SQLiteStore（数据层）和已有的应用服务函数。
+- Web 只调用 SQLiteStore（数据层）和已有的领域服务函数。
 - Web 不直接调用 Adapter（ping、dns、tcp、http 探针）。
-- Web 只读展示 CLI 产生的历史结果，不承载业务判断逻辑。
+- Web 展示 CLI 产生的历史结果，也可通过领域服务触发只读巡检和扫描。
 """
 
 from __future__ import annotations
@@ -13,21 +13,26 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import HTMLResponse, JSONResponse
+from pydantic import BaseModel
 
 from .. import __version__
-from ..models import Asset, Finding, ProbeResult, Report, TaskRun
+from ..assets import AssetScanError, run_asset_scan
+from ..config import OpsConfig
+from ..health import HealthCheckError, run_health_check
+from ..models import Asset, Finding, ProbeResult, Report, TaskRun, TaskStatus
 from ..storage import SQLiteStore, TaskRecordNotFound
-from ..tasks import get_task, list_tasks
+from ..tasks import finish_task_run, get_task, list_tasks, new_task_run
 from .dashboard import render_dashboard
 
 app = FastAPI(
     title="IT Ops Toolkit Web Console",
     version=__version__,
-    description="中小企业 IT 运维工具箱 — Web 可视化层（只读展示历史结果）",
+    description="中小企业 IT 运维工具箱 — Web 可视化层",
 )
 
-# 全局 store 实例，由 CLI 启动时注入或测试时直接设置。
+# 全局实例，由 CLI 启动时注入或测试时直接设置。
 _store: SQLiteStore | None = None
+_config: OpsConfig | None = None
 
 
 def set_store(store: SQLiteStore) -> None:
@@ -36,12 +41,43 @@ def set_store(store: SQLiteStore) -> None:
     _store = store
 
 
+def set_config(config: OpsConfig | None) -> None:
+    """注入 OpsConfig 实例。传入 None 可清除配置。"""
+    global _config
+    _config = config
+
+
 def get_store() -> SQLiteStore:
     """获取当前 store 实例，未设置时使用默认路径。"""
     global _store
     if _store is None:
         _store = SQLiteStore(Path("data/ops.sqlite"))
     return _store
+
+
+def get_config() -> OpsConfig:
+    """获取当前配置实例，未设置时抛出异常。"""
+    global _config
+    if _config is None:
+        raise HTTPException(
+            status_code=503,
+            detail="configuration not available; start web console via 'ops web run'",
+        )
+    return _config
+
+
+# ---------------------------------------------------------------------------
+# 请求模型
+# ---------------------------------------------------------------------------
+
+
+class TriggerHealthCheckRequest(BaseModel):
+    profile_name: str
+
+
+class TriggerAssetScanRequest(BaseModel):
+    profile_name: str
+    tcp_without_ping: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -53,7 +89,8 @@ def get_store() -> SQLiteStore:
 def dashboard() -> str:
     """渲染 HTML 仪表盘首页。"""
     store = get_store()
-    return render_dashboard(store=store)
+    config_available = _config is not None
+    return render_dashboard(store=store, config_available=config_available)
 
 
 # ---------------------------------------------------------------------------
@@ -88,6 +125,7 @@ def api_overview() -> dict[str, Any]:
         "task_type_counts": task_type_counts,
         "severity_counts": severity_counts,
         "version": __version__,
+        "config_available": _config is not None,
     }
 
 
@@ -142,10 +180,16 @@ def _asset_to_dict(asset: Asset) -> dict[str, Any]:
 @app.get("/api/tasks", summary="任务历史列表")
 def api_list_tasks(
     limit: int = Query(default=20, ge=1, le=500),
+    task_type: str | None = Query(default=None, description="按任务类型筛选"),
+    status: str | None = Query(default=None, description="按任务状态筛选"),
 ) -> list[dict[str, Any]]:
-    """返回最近的任务执行记录。"""
+    """返回最近的任务执行记录，支持按类型和状态筛选。"""
     store = get_store()
     tasks = list_tasks(store, limit=limit)
+    if task_type:
+        tasks = [t for t in tasks if t.task_type == task_type]
+    if status:
+        tasks = [t for t in tasks if t.status.value == status]
     return [_task_to_dict(t) for t in tasks]
 
 
@@ -195,6 +239,98 @@ def api_get_task_snapshots(task_id: str) -> list[dict[str, Any]]:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
     snapshots = store.list_local_snapshots_for_task(task_id)
     return [_snapshot_to_dict(s) for s in snapshots]
+
+
+# ---------------------------------------------------------------------------
+# API 路由 — 任务触发（通过领域服务，不直接调用 Adapter）
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/tasks/trigger/health-check", summary="触发巡检任务")
+def api_trigger_health_check(req: TriggerHealthCheckRequest) -> dict[str, Any]:
+    """通过领域服务触发一次巡检任务。"""
+    config = get_config()
+    store = get_store()
+
+    if req.profile_name not in config.health_profiles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"health profile not found: {req.profile_name}",
+        )
+
+    task = new_task_run(task_type="health_check", requested_by="web")
+    task = task.model_copy(update={"source": "web"})
+    store.save_task_run(task)
+
+    try:
+        results = run_health_check(
+            config=config,
+            profile_name=req.profile_name,
+            task=task,
+            store=store,
+        )
+    except HealthCheckError as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"health check failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(
+        update={
+            "result_refs": [r.id for r in results],
+            "target_refs": [r.target.value for r in results],
+        }
+    )
+    store.save_task_run(task)
+    return _task_to_dict(task)
+
+
+@app.post("/api/tasks/trigger/asset-scan", summary="触发资产扫描任务")
+def api_trigger_asset_scan(req: TriggerAssetScanRequest) -> dict[str, Any]:
+    """通过领域服务触发一次资产扫描任务。"""
+    config = get_config()
+    store = get_store()
+
+    if req.profile_name not in config.scan_profiles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scan profile not found: {req.profile_name}",
+        )
+
+    task = new_task_run(task_type="asset_scan", requested_by="web")
+    task = task.model_copy(update={"source": "web"})
+    store.save_task_run(task)
+
+    try:
+        assets, results = run_asset_scan(
+            config=config,
+            profile_name=req.profile_name,
+            task=task,
+            store=store,
+            tcp_without_ping=req.tcp_without_ping,
+        )
+    except AssetScanError as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"asset scan failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(
+        update={
+            "result_refs": [r.id for r in results],
+            "target_refs": [a.ip for a in assets],
+        }
+    )
+    store.save_task_run(task)
+    return _task_to_dict(task)
 
 
 def _task_to_dict(task: TaskRun) -> dict[str, Any]:
@@ -328,6 +464,88 @@ def _report_to_dict(report: Report) -> dict[str, Any]:
         "path": report.path,
         "summary": report.summary,
         "generated_at": report.generated_at,
+    }
+
+
+# ---------------------------------------------------------------------------
+# API 路由 — 配置查看
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/config", summary="查看当前配置")
+def api_get_config() -> dict[str, Any]:
+    """返回当前配置的只读视图（不包含敏感信息）。"""
+    config = get_config()
+    return _config_to_dict(config)
+
+
+@app.get("/api/config/health-profiles", summary="查看巡检配置")
+def api_get_health_profiles() -> list[dict[str, Any]]:
+    """返回所有巡检配置。"""
+    config = get_config()
+    return [
+        {
+            "name": name,
+            "description": profile.description,
+            "targets": [
+                {
+                    "name": t.name,
+                    "type": t.type,
+                    "value": str(t.value),
+                    "checks": t.checks,
+                    "port": t.port,
+                }
+                for t in profile.targets
+            ],
+        }
+        for name, profile in config.health_profiles.items()
+    ]
+
+
+@app.get("/api/config/scan-profiles", summary="查看扫描配置")
+def api_get_scan_profiles() -> list[dict[str, Any]]:
+    """返回所有资产扫描配置。"""
+    config = get_config()
+    return [
+        {
+            "name": name,
+            "description": profile.description,
+            "subnets": profile.subnets,
+            "ping": {
+                "enabled": profile.ping.enabled,
+                "timeout_ms": profile.ping.timeout_ms,
+                "retries": profile.ping.retries,
+            },
+            "tcp_ports": profile.tcp_ports,
+        }
+        for name, profile in config.scan_profiles.items()
+    ]
+
+
+def _config_to_dict(config: OpsConfig) -> dict[str, Any]:
+    return {
+        "app": {
+            "name": config.app.name,
+            "environment": config.app.environment,
+        },
+        "scan_profiles": list(config.scan_profiles.keys()),
+        "health_profiles": list(config.health_profiles.keys()),
+        "probe_defaults": {
+            "timeout_ms": config.probe_defaults.timeout_ms,
+            "retries": config.probe_defaults.retries,
+            "concurrency": config.probe_defaults.concurrency,
+        },
+        "reports": {
+            "output_dir": str(config.reports.output_dir),
+            "formats": config.reports.formats,
+        },
+        "storage": {
+            "type": config.storage.type,
+            "path": str(config.storage.path),
+        },
+        "security": {
+            "risky_ports": config.security.risky_ports,
+        },
     }
 
 

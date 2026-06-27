@@ -13,6 +13,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from it_ops_toolkit.config import OpsConfig
 from it_ops_toolkit.models import (
     Asset,
     ErrorInfo,
@@ -27,7 +28,7 @@ from it_ops_toolkit.models import (
     TaskStatus,
 )
 from it_ops_toolkit.storage import SQLiteStore
-from it_ops_toolkit.web.app import app, set_store
+from it_ops_toolkit.web.app import app, set_config, set_store
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +47,41 @@ def store(tmp_path: Path) -> SQLiteStore:
 @pytest.fixture
 def client(store: SQLiteStore) -> TestClient:
     set_store(store)
+    set_config(None)  # 默认不注入配置
+    return TestClient(app)
+
+
+@pytest.fixture
+def config() -> OpsConfig:
+    return OpsConfig.model_validate({
+        "app": {"name": "Test", "environment": "test"},
+        "scan_profiles": {
+            "test_scan": {
+                "description": "测试扫描",
+                "subnets": ["192.168.1.0/30"],
+                "ping": {"enabled": True, "timeout_ms": 200, "retries": 0},
+                "tcp_ports": [80],
+            }
+        },
+        "health_profiles": {
+            "test_health": {
+                "description": "测试巡检",
+                "targets": [
+                    {"name": "网关", "type": "ip", "value": "192.168.1.1", "checks": ["ping"]},
+                ],
+            }
+        },
+        "probe_defaults": {"timeout_ms": 200, "retries": 0, "concurrency": 4},
+        "reports": {"output_dir": "./reports", "formats": ["markdown"]},
+        "storage": {"type": "sqlite", "path": "./data/test.sqlite"},
+        "security": {"risky_ports": [22, 3389]},
+    })
+
+
+@pytest.fixture
+def client_with_config(store: SQLiteStore, config: OpsConfig) -> TestClient:
+    set_store(store)
+    set_config(config)
     return TestClient(app)
 
 
@@ -431,5 +467,302 @@ class TestDashboardPage:
         store.save_task_run(_make_task())
 
         resp = client.get("/")
+        assert resp.status_code == 200
+        assert "IT Ops Toolkit" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# 任务筛选
+# ---------------------------------------------------------------------------
+
+
+class TestTaskFiltering:
+    def test_filter_by_task_type(self, client: TestClient, store: SQLiteStore) -> None:
+        task1 = _make_task(task_type="health_check")
+        task2 = _make_task(task_type="asset_scan")
+        store.save_task_run(task1)
+        store.save_task_run(task2)
+
+        resp = client.get("/api/tasks?task_type=health_check")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["task_type"] == "health_check"
+
+    def test_filter_by_status(self, client: TestClient, store: SQLiteStore) -> None:
+        task1 = _make_task(status=TaskStatus.success)
+        task2 = _make_task(status=TaskStatus.failed)
+        store.save_task_run(task1)
+        store.save_task_run(task2)
+
+        resp = client.get("/api/tasks?status=failed")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["status"] == "failed"
+
+    def test_filter_by_type_and_status(self, client: TestClient, store: SQLiteStore) -> None:
+        task1 = _make_task(task_type="health_check", status=TaskStatus.success)
+        task2 = _make_task(task_type="health_check", status=TaskStatus.failed)
+        task3 = _make_task(task_type="asset_scan", status=TaskStatus.success)
+        store.save_task_run(task1)
+        store.save_task_run(task2)
+        store.save_task_run(task3)
+
+        resp = client.get("/api/tasks?task_type=health_check&status=success")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["task_type"] == "health_check"
+        assert data[0]["status"] == "success"
+
+    def test_filter_no_match(self, client: TestClient, store: SQLiteStore) -> None:
+        task1 = _make_task(task_type="health_check")
+        store.save_task_run(task1)
+
+        resp = client.get("/api/tasks?task_type=asset_scan")
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+
+# ---------------------------------------------------------------------------
+# 配置查看
+# ---------------------------------------------------------------------------
+
+
+class TestConfigEndpoints:
+    def test_config_not_available(self, client: TestClient) -> None:
+        resp = client.get("/api/config")
+        assert resp.status_code == 503
+
+    def test_get_config(self, client_with_config: TestClient) -> None:
+        resp = client_with_config.get("/api/config")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["app"]["name"] == "Test"
+        assert "test_scan" in data["scan_profiles"]
+        assert "test_health" in data["health_profiles"]
+        assert data["probe_defaults"]["timeout_ms"] == 200
+        assert data["security"]["risky_ports"] == [22, 3389]
+
+    def test_get_health_profiles(self, client_with_config: TestClient) -> None:
+        resp = client_with_config.get("/api/config/health-profiles")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "test_health"
+        assert len(data[0]["targets"]) == 1
+        assert data[0]["targets"][0]["name"] == "网关"
+        assert data[0]["targets"][0]["checks"] == ["ping"]
+
+    def test_get_scan_profiles(self, client_with_config: TestClient) -> None:
+        resp = client_with_config.get("/api/config/scan-profiles")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert len(data) == 1
+        assert data[0]["name"] == "test_scan"
+        assert "192.168.1.0/30" in data[0]["subnets"]
+        assert 80 in data[0]["tcp_ports"]
+
+    def test_health_profiles_not_available(self, client: TestClient) -> None:
+        resp = client.get("/api/config/health-profiles")
+        assert resp.status_code == 503
+
+    def test_scan_profiles_not_available(self, client: TestClient) -> None:
+        resp = client.get("/api/config/scan-profiles")
+        assert resp.status_code == 503
+
+    def test_overview_config_available_flag(
+        self, client_with_config: TestClient
+    ) -> None:
+        resp = client_with_config.get("/api/overview")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["config_available"] is True
+
+    def test_overview_config_not_available(self, client: TestClient) -> None:
+        resp = client.get("/api/overview")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["config_available"] is False
+
+
+# ---------------------------------------------------------------------------
+# 任务触发
+# ---------------------------------------------------------------------------
+
+
+class TestTaskTrigger:
+    def test_trigger_health_check_no_config(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/tasks/trigger/health-check",
+            json={"profile_name": "test_health"},
+        )
+        assert resp.status_code == 503
+
+    def test_trigger_health_check_invalid_profile(
+        self, client_with_config: TestClient
+    ) -> None:
+        resp = client_with_config.post(
+            "/api/tasks/trigger/health-check",
+            json={"profile_name": "nonexistent"},
+        )
+        assert resp.status_code == 400
+        assert "not found" in resp.json()["detail"]
+
+    def test_trigger_health_check_success(
+        self, client_with_config: TestClient, store: SQLiteStore
+    ) -> None:
+        from unittest.mock import patch
+
+        mock_results = [
+            ProbeResult(
+                id="probe-mock-1",
+                task_id="mock-task",
+                probe_type="ping",
+                target=Target(type="ip", value="192.168.1.1"),
+                status=ProbeStatus.success,
+                started_at=datetime.now(UTC),
+                ended_at=datetime.now(UTC),
+                duration_ms=5,
+                observations={"reachable": True, "avg_rtt_ms": 2},
+            ),
+        ]
+
+        with patch(
+            "it_ops_toolkit.web.app.run_health_check", return_value=mock_results
+        ):
+            resp = client_with_config.post(
+                "/api/tasks/trigger/health-check",
+                json={"profile_name": "test_health"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["source"] == "web"
+        assert data["requested_by"] == "web"
+        assert data["task_type"] == "health_check"
+        assert len(data["result_refs"]) == 1
+
+        # 验证任务已保存
+        saved_task = store.get_task_run(data["id"])
+        assert saved_task.status.value == "success"
+
+    def test_trigger_health_check_failure(
+        self, client_with_config: TestClient, store: SQLiteStore
+    ) -> None:
+        from unittest.mock import patch
+
+        from it_ops_toolkit.health import HealthCheckError
+
+        with patch(
+            "it_ops_toolkit.web.app.run_health_check",
+            side_effect=HealthCheckError("probe failed"),
+        ):
+            resp = client_with_config.post(
+                "/api/tasks/trigger/health-check",
+                json={"profile_name": "test_health"},
+            )
+
+        assert resp.status_code == 500
+        assert "probe failed" in resp.json()["detail"]
+
+    def test_trigger_asset_scan_no_config(self, client: TestClient) -> None:
+        resp = client.post(
+            "/api/tasks/trigger/asset-scan",
+            json={"profile_name": "test_scan"},
+        )
+        assert resp.status_code == 503
+
+    def test_trigger_asset_scan_invalid_profile(
+        self, client_with_config: TestClient
+    ) -> None:
+        resp = client_with_config.post(
+            "/api/tasks/trigger/asset-scan",
+            json={"profile_name": "nonexistent"},
+        )
+        assert resp.status_code == 400
+        assert "not found" in resp.json()["detail"]
+
+    def test_trigger_asset_scan_success(
+        self, client_with_config: TestClient, store: SQLiteStore
+    ) -> None:
+        from unittest.mock import patch
+
+        mock_assets = [
+            Asset(
+                id="asset-192-168-1-1",
+                ip="192.168.1.1",
+                hostname="router",
+                first_seen=datetime.now(UTC),
+                last_seen=datetime.now(UTC),
+                status="active",
+                source="scan_profile:test_scan",
+            ),
+        ]
+        mock_results = [
+            ProbeResult(
+                id="probe-mock-scan-1",
+                task_id="mock-task",
+                probe_type="ping",
+                target=Target(type="ip", value="192.168.1.1"),
+                status=ProbeStatus.success,
+                started_at=datetime.now(UTC),
+                ended_at=datetime.now(UTC),
+                duration_ms=3,
+                observations={"reachable": True},
+            ),
+        ]
+
+        with patch(
+            "it_ops_toolkit.web.app.run_asset_scan",
+            return_value=(mock_assets, mock_results),
+        ):
+            resp = client_with_config.post(
+                "/api/tasks/trigger/asset-scan",
+                json={"profile_name": "test_scan"},
+            )
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "success"
+        assert data["source"] == "web"
+        assert data["task_type"] == "asset_scan"
+        assert "192.168.1.1" in data["target_refs"]
+
+    def test_trigger_asset_scan_failure(
+        self, client_with_config: TestClient, store: SQLiteStore
+    ) -> None:
+        from unittest.mock import patch
+
+        from it_ops_toolkit.assets import AssetScanError
+
+        with patch(
+            "it_ops_toolkit.web.app.run_asset_scan",
+            side_effect=AssetScanError("scan failed"),
+        ):
+            resp = client_with_config.post(
+                "/api/tasks/trigger/asset-scan",
+                json={"profile_name": "test_scan"},
+            )
+
+        assert resp.status_code == 500
+        assert "scan failed" in resp.json()["detail"]
+
+
+# ---------------------------------------------------------------------------
+# 配置页面
+# ---------------------------------------------------------------------------
+
+
+class TestConfigPage:
+    def test_config_page_without_config(self, client: TestClient) -> None:
+        resp = client.get("/")
+        assert resp.status_code == 200
+        assert "IT Ops Toolkit" in resp.text
+
+    def test_config_page_with_config(self, client_with_config: TestClient) -> None:
+        resp = client_with_config.get("/")
         assert resp.status_code == 200
         assert "IT Ops Toolkit" in resp.text

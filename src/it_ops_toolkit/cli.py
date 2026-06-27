@@ -1511,13 +1511,16 @@ def web_run(
         console.print("[red]缺少 Web 依赖。[/red]请安装：pip install 'it-ops-toolkit[web]'")
         raise typer.Exit(code=1) from exc
 
-    from .web.app import app as web_app_instance, set_store
+    from .web.app import app as web_app_instance, set_config, set_store
 
     set_store(store)
+    set_config(loaded)
     console.print(f"[bold green]Web Console 启动中...[/bold green]")
     console.print(f"  地址：[cyan]http://{host}:{port}[/cyan]")
     console.print(f"  API 文档：[cyan]http://{host}:{port}/docs[/cyan]")
     console.print(f"  数据库：[dim]{store.path}[/dim]")
+    console.print(f"  巡检配置：[dim]{', '.join(loaded.health_profiles.keys()) or '无'}[/dim]")
+    console.print(f"  扫描配置：[dim]{', '.join(loaded.scan_profiles.keys()) or '无'}[/dim]")
     console.print(f"  [yellow]按 Ctrl+C 停止服务[/yellow]")
     uvicorn.run(web_app_instance, host=host, port=port, reload=reload)
 
