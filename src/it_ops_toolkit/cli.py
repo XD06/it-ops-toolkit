@@ -533,6 +533,9 @@ def health_http_matrix(
     console.print(f"目标数量：{summary['target_count']}")
     console.print(f"成功数量：{summary['success_count']}")
     console.print(f"失败数量：{summary['failed_count']}")
+    mismatch_count = summary.get("mismatch_count", 0)
+    if mismatch_count:
+        console.print(f"[yellow]状态码不匹配：[/yellow]{mismatch_count}")
 
 
 @diagnose_app.command("internet")

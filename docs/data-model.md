@@ -118,7 +118,7 @@ ProbeResult 表示一次探测结果。
 | `id` | 探测结果 ID |
 | `task_id` | 所属任务 |
 | `target_id` | 目标 ID |
-| `probe_type` | `ping`、`dns`、`tcp`、`http` |
+| `probe_type` | `ping`、`dns`、`tcp`、`http`、`tls_cert` |
 | `status` | `success`、`failed`、`timeout`、`skipped` |
 | `started_at` | 开始时间 |
 | `ended_at` | 结束时间 |

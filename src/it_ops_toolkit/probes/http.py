@@ -51,6 +51,7 @@ def check_http_url(
             code="http_error",
             message="HTTP request returned error status",
             detail=f"HTTP {exc.code}",
+            status_code=exc.code,
         )
     except (URLError, TimeoutError, ssl.SSLError) as exc:
         return _failed_result(
@@ -75,7 +76,11 @@ def _failed_result(
     code: str,
     message: str,
     detail: str,
+    status_code: int | None = None,
 ) -> ProbeResult:
+    observations: dict[str, object] = {"url": url, "method": method, "ok": False}
+    if status_code is not None:
+        observations["status_code"] = status_code
     return ProbeResult(
         id=f"probe-http-{_safe_id(url)}",
         task_id=task_id,
@@ -85,7 +90,7 @@ def _failed_result(
         started_at=started,
         ended_at=datetime.now(UTC),
         duration_ms=int((monotonic() - start) * 1000),
-        observations={"url": url, "method": method, "ok": False},
+        observations=observations,
         error=ErrorInfo(
             code=code,
             message=message,

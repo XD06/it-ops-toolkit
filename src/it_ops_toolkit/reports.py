@@ -891,6 +891,13 @@ def _render_health_matrix_details(task: TaskRun) -> list[str]:
     if not summary:
         return []
 
+    scenario = str(summary.get("scenario", ""))
+    if scenario == "health_http_matrix":
+        return _render_http_matrix_details(summary)
+    return _render_tcp_matrix_details(summary)
+
+
+def _render_tcp_matrix_details(summary: dict[str, object]) -> list[str]:
     lines = [
         "## 批量 TCP 端口测试",
         "",
@@ -912,6 +919,43 @@ def _render_health_matrix_details(task: TaskRun) -> list[str]:
     return lines
 
 
+def _render_http_matrix_details(summary: dict[str, object]) -> list[str]:
+    mismatch_count = int(summary.get("mismatch_count", 0))
+    lines = [
+        "## 批量 HTTP 端口测试",
+        "",
+        f"- 来源文件：{summary['source_file']}",
+        f"- 目标数量：{summary['target_count']}",
+        f"- 成功数量：{summary['success_count']}",
+        f"- 失败数量：{summary['failed_count']}",
+    ]
+    if mismatch_count:
+        lines.append(f"- 状态码不匹配：{mismatch_count}")
+    lines.extend(
+        [
+            "",
+            "| 行号 | 名称 | URL | 方法 | 状态 | HTTP 状态码 | 期望状态码 | 匹配 | 耗时 ms | 错误 |",
+            "|---:|---|---|---|---|---:|---|---|---:|---|",
+        ]
+    )
+    for entry in summary["entries"]:
+        http_status = entry.get("http_status_code")
+        http_status_label = str(http_status) if http_status is not None else ""
+        expected_label = entry.get("expected_status", "")
+        match_label = _http_status_match_label(entry)
+        lines.append(
+            f"| {entry['row']} | {entry['name']} | {entry['url']} | {entry['method']} | {entry['status']} | {http_status_label} | {expected_label} | {match_label} | {entry['duration_ms'] if entry['duration_ms'] is not None else ''} | {entry['error']} |"
+        )
+    lines.append("")
+    return lines
+
+
+def _http_status_match_label(entry: dict[str, object]) -> str:
+    if not entry.get("expected_status"):
+        return "未检查"
+    return "是" if entry.get("status_match") else "否"
+
+
 def _health_matrix_summary_payload(task: TaskRun) -> dict[str, object] | None:
     if task.task_type != "health_matrix" or task.summary.get("scenario") not in {
         "health_tcp_matrix",
@@ -919,11 +963,13 @@ def _health_matrix_summary_payload(task: TaskRun) -> dict[str, object] | None:
     }:
         return None
     return {
+        "scenario": str(task.summary.get("scenario", "")),
         "source_file": str(task.summary.get("source_file", "")),
         "target_count": int(task.summary.get("target_count", 0)),
         "result_count": int(task.summary.get("result_count", 0)),
         "result_ids": [str(result_id) for result_id in task.summary.get("result_ids", [])],
         "success_count": int(task.summary.get("success_count", 0)),
         "failed_count": int(task.summary.get("failed_count", 0)),
+        "mismatch_count": int(task.summary.get("mismatch_count", 0)),
         "entries": list(task.summary.get("entries", [])),
     }

@@ -312,8 +312,10 @@ ops health http-matrix --file ./targets.csv --config ./ops.yaml
 CSV 字段：
 
 ```csv
-name,url,method
-portal,https://portal.example.local,GET
+name,url,method,expected_status,owner,description
+portal,https://portal.example.local,GET,200,alice,门户首页
+api,https://api.example.local/health,HEAD,200-299,bob,健康检查
+redirect,https://old.example.local,GET,301-302,carol,旧站跳转
 ```
 
 说明：
@@ -321,6 +323,9 @@ portal,https://portal.example.local,GET
 - `method` 目前支持只读检查方法：`GET`、`HEAD`。
 - 未填写 `method` 时默认使用 `GET`。
 - 不支持 `POST`、`PUT`、`PATCH`、`DELETE` 等可能产生业务影响的方法。
+- `expected_status` 可选，支持单个状态码（`200`）、范围（`200-299`）和多个值（`200,301,302`）。
+- 未填写 `expected_status` 时不做状态码匹配检查。
+- `owner` 和 `description` 为可选展示字段，不参与探测逻辑。
 
 验收：
 
@@ -328,8 +333,10 @@ portal,https://portal.example.local,GET
 - 能逐行执行 HTTP/HTTPS 检查。
 - 能按 CSV 中的 `method` 执行 `GET` 或 `HEAD`。
 - 非只读 HTTP 方法必须拒绝执行。
+- 能记录每行的 HTTP 状态码并与 `expected_status` 比对。
+- 非法 `expected_status` 格式必须给出明确错误。
 - 单行失败不影响其他行。
-- 能保存 `health_matrix` 任务摘要。
+- 能保存 `health_matrix` 任务摘要，包含 `mismatch_count`。
 - 能通过 `ops report generate` 生成报告，并进入 `ops export bundle`。
 
 ## diagnose 命令

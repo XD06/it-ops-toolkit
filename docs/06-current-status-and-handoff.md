@@ -119,7 +119,7 @@ python -m unittest discover -s tests
 ### 巡检批量工具
 
 - `ops health tcp-matrix`：从 CSV 批量读取 TCP 目标，逐行执行端口可达性测试。
-- `ops health http-matrix`：从 CSV 批量读取 HTTP/HTTPS 目标，逐行执行可达性测试，支持只读方法 `GET` 和 `HEAD`。
+- `ops health http-matrix`：从 CSV 批量读取 HTTP/HTTPS 目标，逐行执行可达性测试，支持只读方法 `GET` 和 `HEAD`，支持 `expected_status` 期望状态码比对（单个码、范围、多值）。
 
 ## 当前尚未开始但已规划的能力
 
