@@ -82,12 +82,50 @@
 
 后续可扩展：
 
-- SQLite。
 - PostgreSQL。
 - 数据迁移。
 - 数据保留策略。
-- 历史趋势。
 - Web 查询接口。
+
+## Phase 6 扩展：历史趋势查询与聚合
+
+### 新增能力
+
+- **按时间范围查询**：`list_probe_results_between(start, end)` 查询指定时间范围内的探测结果。
+- **按探针类型和目标筛选**：在时间范围查询基础上，支持 `probe_type` 和 `target` 筛选。
+- **聚合统计**：`get_probe_stats(probe_type, target, start, end, granularity)` 按天/小时分组，计算 avg/min/max/p95。
+- **状态分布**：`get_status_distribution(probe_type, target, start, end)` 统计成功/失败/超时分布。
+
+### 聚合粒度
+
+支持两种聚合粒度：
+
+- `hourly`：按小时分组，适合短时间范围（24 小时内）。
+- `daily`：按天分组，适合长时间范围（7 天以上）。
+
+### 统计指标
+
+对于数值型指标（如 RTT、丢包率），计算：
+
+- `count`：样本数。
+- `avg`：平均值。
+- `min`：最小值。
+- `max`：最大值。
+- `p95`：95 分位数。
+
+对于状态型指标，计算：
+
+- `success_count`：成功次数。
+- `failed_count`：失败次数。
+- `timeout_count`：超时次数。
+- `success_rate`：成功率百分比。
+
+### 设计原则
+
+- 聚合在 SQLite 层完成，减少 Python 内存消耗。
+- 趋势数据是只读的，不修改原始数据。
+- 聚合结果结构化，可被 CLI、Web、AI 复用。
+- 趋势查询不依赖外部时间序列数据库。
 
 ## 验收标准
 
@@ -98,4 +136,12 @@
 - 能按资产查询历史。
 - 能被报告模块读取。
 - 存储接口不绑定某个 UI。
+
+Phase 6 完成时，应额外满足：
+
+- 能查询指定时间范围内的探测结果。
+- 能按天/小时生成聚合统计。
+- 聚合结果包含 avg/min/max/p95。
+- 能统计状态分布。
+- 趋势查询可被 CLI、Web 和 AI 复用。
 

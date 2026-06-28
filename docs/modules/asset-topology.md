@@ -94,13 +94,70 @@
 后续可扩展：
 
 - SNMP 获取交换机和路由器信息。
-- ARP 表整合。
 - DHCP 租约整合。
 - 交换机端口映射。
-- 设备类型识别。
 - 资产负责人和用途维护。
 - IPAM 简化能力。
 - 资产变更告警。
+
+## Phase 8 扩展：网络拓扑与资产关系
+
+Phase 8 在基础资产发现之上，新增了网络连接关系可见性：
+
+### ARP 表采集
+
+- **文件**：`probes/arp.py`
+- 跨平台支持：Windows `arp -a`、Linux `ip neigh` / `arp -n`
+- 输出 `ArpEntry` 列表（IP、MAC、接口、状态、厂商、设备类型）
+- 内置精简 OUI 数据库（40+ 常见厂商前缀），离线可用
+- 根据厂商推断设备类型：`network_device` / `printer` / `server` / `iot` / `nas` / `virtual` / `workstation`
+
+### Traceroute Adapter
+
+- **文件**：`probes/traceroute.py`
+- 跨平台支持：Windows `tracert`、Linux `traceroute` / `tracepath`
+- 输出 `TraceRouteResult`（每一跳 IP、RTT、超时状态）
+- 自动检测是否到达目标
+
+### 拓扑分析服务
+
+- **文件**：`topology.py`
+- 采集本机网络接口、默认网关、ARP 表
+- 可选执行 traceroute 到外部目标
+- 将 ARP 表与资产库对比（`reconcile_arp_with_assets`）：
+  - 新设备：ARP 有、资产库无
+  - 离线设备：资产库有、ARP 无
+  - 匹配设备：两者都有
+  - 未知厂商：无法识别 OUI 的设备
+- 未知设备检测（`detect_unknown_devices`）：安全相关功能
+
+### 数据模型
+
+- `ArpEntry`：ARP 表条目
+- `TraceRouteHop` / `TraceRouteResult`：路由追踪结果
+- `AssetReconciliation`：资产对比结果
+- `TopologyView`：完整拓扑视图
+
+### CLI 命令
+
+- `ops topology show`：展示本机视角拓扑
+- `ops topology arp`：采集 ARP 表
+- `ops topology unknown`：检测未知设备
+- `ops probe traceroute <target>`：路由追踪
+
+### Web API
+
+- `GET /api/topology`：拓扑视图
+- `GET /api/topology/arp`：ARP 表
+- `GET /api/topology/unknown`：未知设备
+- `GET /api/topology/traceroute/{target}`：路由追踪
+
+### Phase 8 验收标准
+
+- ✅ 能采集本机 ARP 表
+- ✅ 能展示 IP-MAC-厂商对应关系
+- ✅ 能检测 ARP 表中不在资产库的 MAC
+- ✅ 能展示基础网关→终端拓扑
 
 ## 验收标准
 

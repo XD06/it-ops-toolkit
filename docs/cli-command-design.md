@@ -39,6 +39,7 @@ ops diagnose rdp
 ops diagnose printer
 ops diagnose dns
 ops diagnose slow-network
+ops diagnose                   # 交互式诊断引导
 
 ops collect local
 
@@ -50,6 +51,9 @@ ops export bundle
 ops security check
 ops security cert-check
 ops automate flush-dns
+
+ops probe traceroute
+ops probe snmp
 
 ops web run
 ```
@@ -735,3 +739,42 @@ ops health check
 ops task list
 ops report generate
 ```
+
+## probe 命令（Phase 8+）
+
+### ops probe traceroute
+
+用途：执行路由追踪，显示从本机到目标的每一跳。
+
+示例：
+
+```powershell
+ops probe traceroute 8.8.8.8
+ops probe traceroute 192.168.1.1 --max-hops 20
+ops probe traceroute 8.8.8.8 --format json
+```
+
+### ops probe snmp
+
+用途：通过 SNMP v2c 采集网络设备信息或查询单个 OID。
+
+示例：
+
+```powershell
+# 采集设备基础信息（sysDescr、sysName、接口列表等）
+ops probe snmp 192.168.1.1 --community public
+
+# 查询单个 OID
+ops probe snmp 192.168.1.1 --oid 1.3.6.1.2.1.1.1.0
+
+# 自定义端口和超时
+ops probe snmp 192.168.1.1 --port 1161 --timeout 5000
+```
+
+说明：
+
+- 纯 Python 实现，不依赖 `pysnmp` 或系统 `snmpget`。
+- 支持 SNMP v2c GET / GETNEXT / WALK。
+- 采集设备信息时自动遍历接口表（ifDescr、ifOperStatus）。
+- 接口状态：1=up, 2=down, 3=testing。
+

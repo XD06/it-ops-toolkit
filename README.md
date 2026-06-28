@@ -54,6 +54,7 @@
 - [开发规则](docs/04-development-rules.md)
 - [文档协作与开发流程](docs/05-documentation-workflow.md)
 - [当前进度与交接说明](docs/06-current-status-and-handoff.md)
+- [AI 接手指南](docs/AI-HANDOVER.md)
 - [Phase 1 实施计划](docs/plans/phase-1-cli-foundation.md)
 - [数据模型](docs/data-model.md)
 - [配置文件设计](docs/config-schema.md)
@@ -139,4 +140,37 @@ python -m it_ops_toolkit automate flush-dns --config .\ops.yaml --confirm
 python -m it_ops_toolkit health tcp-matrix --config .\ops.yaml --file .\targets.csv
 python -m it_ops_toolkit health http-matrix --config .\ops.yaml --file .\targets.csv
 python -m unittest discover -s tests
+```
+
+## 打包分发
+
+项目支持使用 PyInstaller 打包为单文件可执行程序，方便在没有 Python 环境的机器上使用。
+
+### 前置条件
+
+```bash
+pip install -e ".[web,build]"
+```
+
+### 打包命令
+
+```bash
+# 完整打包（含 Web Console）
+python build/build_exe.py
+
+# 仅 CLI（排除 Web 依赖，体积更小）
+python build/build_exe.py --cli
+
+# 清理后重新打包
+python build/build_exe.py --clean
+```
+
+### 输出
+
+打包完成后，可执行文件位于 `dist/ops.exe`（Windows）或 `dist/ops`（Linux/macOS）。
+
+```bash
+# 使用打包后的可执行文件
+./dist/ops.exe --help
+./dist/ops.exe web run --config ops.yaml
 ```

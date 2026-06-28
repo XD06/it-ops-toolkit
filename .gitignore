@@ -9,7 +9,8 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 dist/
-build/
+build/pyinstaller/
+build/*.spec.log
 
 # 数据与输出（运行时生成，不入库）
 *.sqlite

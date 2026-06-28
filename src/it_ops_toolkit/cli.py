@@ -4,6 +4,14 @@ from urllib.parse import urlparse
 
 import typer
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.prompt import Confirm, IntPrompt, Prompt
 from rich.table import Table
 
 from . import __version__
@@ -44,13 +52,50 @@ from .export import ExportError, default_bundle_path, export_bundle
 from .health import HealthCheckError, run_health_check
 from .health_matrix import HealthMatrixError, run_health_tcp_matrix
 from .health_matrix_http import HealthHttpMatrixError, run_health_http_matrix
-from .models import RiskLevel, TaskStatus
+from .models import AIOutput, RiskLevel, TaskStatus
 from .reports import ReportError, generate_report
 from .security import CERT_EXPIRING_SOON_DAYS, run_certificate_check, run_security_check
 from .storage import SQLiteStore, TaskRecordNotFound
 from .tasks import finish_task_run, get_task, list_tasks, new_task_run
+from .alert_engine import (
+    AlertEngineError,
+    acknowledge_alert as acknowledge_alert_event,
+    evaluate_results,
+    load_rules_from_config,
+)
+from .notify import NotificationCenter
+from .scheduler import (
+    CronExpression,
+    SchedulerEngine,
+    SchedulerError,
+    create_scheduled_task,
+)
+from .trend import (
+    TrendError,
+    get_trend,
+    get_trend_summary,
+    list_available_targets,
+)
+from .ai_copilot import (
+    AIAdapterError,
+    explain_anomaly,
+    summarize_recent,
+    summarize_task,
+)
 
 console = Console()
+
+
+def _make_progress() -> Progress:
+    """创建统一的 Rich Progress 实例。"""
+    return Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TextColumn("{task.completed}/{task.total}"),
+        TimeElapsedColumn(),
+        console=console,
+    )
 
 app = typer.Typer(
     name="ops",
@@ -69,6 +114,13 @@ security_app = typer.Typer(help="轻量安全检查。")
 automate_app = typer.Typer(help="低风险自动化动作。")
 task_app = typer.Typer(help="任务记录。")
 web_app = typer.Typer(help="Web Console。")
+schedule_app = typer.Typer(help="定时任务调度。")
+alert_app = typer.Typer(help="告警管理。")
+trend_app = typer.Typer(help="历史趋势分析。")
+ai_app = typer.Typer(help="AI 运维助手。")
+topology_app = typer.Typer(help="网络拓扑与资产关系。")
+probe_app = typer.Typer(help="网络探测（traceroute 等）。")
+workflow_app = typer.Typer(help="受控 Agent 工作流。")
 app.add_typer(config_app, name="config")
 app.add_typer(asset_app, name="asset")
 app.add_typer(health_app, name="health")
@@ -80,6 +132,13 @@ app.add_typer(security_app, name="security")
 app.add_typer(automate_app, name="automate")
 app.add_typer(task_app, name="task")
 app.add_typer(web_app, name="web")
+app.add_typer(schedule_app, name="schedule")
+app.add_typer(alert_app, name="alert")
+app.add_typer(trend_app, name="trend")
+app.add_typer(ai_app, name="ai")
+app.add_typer(topology_app, name="topology")
+app.add_typer(probe_app, name="probe")
+app.add_typer(workflow_app, name="workflow")
 
 
 def main() -> None:
@@ -161,13 +220,19 @@ def asset_scan(
         loaded, store = _load_config_and_store(config)
         task = new_task_run(task_type="asset_scan")
         store.save_task_run(task)
-        assets, results = run_asset_scan(
-            config=loaded,
-            profile_name=profile,
-            task=task,
-            store=store,
-            tcp_without_ping=tcp_without_ping,
-        )
+        progress = _make_progress()
+        with progress:
+            ptask = progress.add_task("资产扫描", total=None)
+            def _cb(desc: str, current: int, total: int) -> None:
+                progress.update(ptask, description=desc, completed=current, total=total)
+            assets, results = run_asset_scan(
+                config=loaded,
+                profile_name=profile,
+                task=task,
+                store=store,
+                tcp_without_ping=tcp_without_ping,
+                progress_callback=_cb,
+            )
         task = finish_task_run(task, status=TaskStatus.success)
         task = task.model_copy(
             update={
@@ -418,12 +483,18 @@ def health_check(
         loaded, store = _load_config_and_store(config)
         task = new_task_run(task_type="health_check")
         store.save_task_run(task)
-        results = run_health_check(
-            config=loaded,
-            profile_name=profile,
-            task=task,
-            store=store,
-        )
+        progress = _make_progress()
+        with progress:
+            ptask = progress.add_task("巡检中", total=None)
+            def _cb(desc: str, current: int, total: int) -> None:
+                progress.update(ptask, description=desc, completed=current, total=total)
+            results = run_health_check(
+                config=loaded,
+                profile_name=profile,
+                task=task,
+                store=store,
+                progress_callback=_cb,
+            )
         task = finish_task_run(task, status=TaskStatus.success)
         task = task.model_copy(
             update={
@@ -462,12 +533,18 @@ def health_tcp_matrix(
         csv_path = file if file.is_absolute() else config.resolve().parent / file
         task = new_task_run(task_type="health_matrix")
         store.save_task_run(task)
-        summary = run_health_tcp_matrix(
-            config=loaded,
-            task=task,
-            store=store,
-            csv_path=csv_path.resolve(),
-        )
+        progress = _make_progress()
+        with progress:
+            ptask = progress.add_task("TCP matrix", total=None)
+            def _cb(desc: str, current: int, total: int) -> None:
+                progress.update(ptask, description=desc, completed=current, total=total)
+            summary = run_health_tcp_matrix(
+                config=loaded,
+                task=task,
+                store=store,
+                csv_path=csv_path.resolve(),
+                progress_callback=_cb,
+            )
         task = finish_task_run(task, status=TaskStatus.success)
         task = task.model_copy(
             update={
@@ -509,12 +586,18 @@ def health_http_matrix(
         csv_path = file if file.is_absolute() else config.resolve().parent / file
         task = new_task_run(task_type="health_matrix")
         store.save_task_run(task)
-        summary = run_health_http_matrix(
-            config=loaded,
-            task=task,
-            store=store,
-            csv_path=csv_path.resolve(),
-        )
+        progress = _make_progress()
+        with progress:
+            ptask = progress.add_task("HTTP matrix", total=None)
+            def _cb(desc: str, current: int, total: int) -> None:
+                progress.update(ptask, description=desc, completed=current, total=total)
+            summary = run_health_http_matrix(
+                config=loaded,
+                task=task,
+                store=store,
+                csv_path=csv_path.resolve(),
+                progress_callback=_cb,
+            )
         task = finish_task_run(task, status=TaskStatus.success)
         task = task.model_copy(
             update={
@@ -538,6 +621,107 @@ def health_http_matrix(
     mismatch_count = summary.get("mismatch_count", 0)
     if mismatch_count:
         console.print(f"[yellow]状态码不匹配：[/yellow]{mismatch_count}")
+
+
+@diagnose_app.callback(invoke_without_command=True)
+def diagnose_guide(
+    ctx: typer.Context,
+) -> None:
+    """场景化故障诊断 — 交互式引导。
+
+    不指定子命令时，进入交互式诊断引导菜单。
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+
+    console.print("[bold cyan]=== 交互式诊断引导 ===[/bold cyan]")
+    console.print("请选择诊断场景：")
+    console.print()
+
+    scenarios = [
+        ("internet", "互联网连通性诊断", "上不了网 / 外网不通"),
+        ("slow-network", "网络慢诊断", "网络延迟高 / 速度慢"),
+        ("intranet", "内网系统诊断", "内网系统打不开"),
+        ("rdp", "远程桌面诊断", "RDP 连不上"),
+        ("printer", "打印机诊断", "打印机不可达"),
+        ("dns", "DNS 诊断", "DNS 解析异常"),
+    ]
+
+    for i, (key, label, desc) in enumerate(scenarios, 1):
+        console.print(f"  [cyan]{i}[/cyan]. {label} [dim]— {desc}[/dim]")
+
+    console.print()
+    choice = IntPrompt.ask(
+        "选择场景编号",
+        choices=[str(i) for i in range(1, len(scenarios) + 1)],
+        default="1",
+        console=console,
+    )
+
+    scenario_key = scenarios[choice - 1][0]
+    config_path = Prompt.ask(
+        "配置文件路径",
+        default=str(DEFAULT_CONFIG_PATH),
+        console=console,
+    )
+
+    # 根据场景收集额外参数
+    extra_args: list[str] = []
+
+    if scenario_key == "internet":
+        ext_ip = Prompt.ask("外部 IP（用于 Ping 测试）", default=DEFAULT_EXTERNAL_IP, console=console)
+        dns_name = Prompt.ask("DNS 测试域名", default=DEFAULT_DNS_NAME, console=console)
+        http_url = Prompt.ask("HTTP 测试 URL", default=DEFAULT_HTTP_URL, console=console)
+        extra_args = ["--external-ip", ext_ip, "--dns-name", dns_name, "--http-url", http_url]
+
+    elif scenario_key == "slow-network":
+        ext_ip = Prompt.ask("外部 IP", default=DEFAULT_EXTERNAL_IP, console=console)
+        dns_name = Prompt.ask("DNS 测试域名", default=DEFAULT_DNS_NAME, console=console)
+        http_url = Prompt.ask("HTTP 测试 URL", default=DEFAULT_HTTP_URL, console=console)
+        extra_args = ["--external-ip", ext_ip, "--dns-name", dns_name, "--http-url", http_url]
+
+    elif scenario_key == "intranet":
+        url = Prompt.ask("内网系统 URL", default="https://intranet.example.local", console=console)
+        extra_args = ["--url", url]
+
+    elif scenario_key == "rdp":
+        target = Prompt.ask("目标地址（IP 或主机名）", default="192.168.1.50", console=console)
+        port = IntPrompt.ask("RDP 端口", default=DEFAULT_RDP_PORT, console=console)
+        extra_args = ["--target", target, "--port", str(port)]
+
+    elif scenario_key == "printer":
+        target = Prompt.ask("打印机地址（IP 或主机名）", default="printer-01.example.local", console=console)
+        ports = Prompt.ask(
+            "打印机端口（逗号分隔）",
+            default=",".join(str(p) for p in DEFAULT_PRINTER_PORTS),
+            console=console,
+        )
+        extra_args = ["--target", target, "--ports", ports]
+
+    elif scenario_key == "dns":
+        name = Prompt.ask("要解析的域名", default=DEFAULT_DNS_NAME, console=console)
+        expected_ip = Prompt.ask("期望 IP（可留空）", default="", console=console)
+        tcp_port = IntPrompt.ask("TCP 端口验证（0 跳过）", default=0, console=console)
+        dns_servers = Prompt.ask("DNS 服务器（逗号分隔，可留空）", default="", console=console)
+        extra_args = ["--name", name]
+        if expected_ip:
+            extra_args += ["--expected-ip", expected_ip]
+        if tcp_port > 0:
+            extra_args += ["--tcp-port", str(tcp_port)]
+        if dns_servers:
+            extra_args += ["--dns-servers", dns_servers]
+
+    console.print()
+    console.print(f"[dim]即将执行：ops diagnose {scenario_key} --config {config_path} {' '.join(extra_args)}[/dim]")
+    if not Confirm.ask("确认执行", default=True, console=console):
+        console.print("[yellow]已取消[/yellow]")
+        raise typer.Exit()
+
+    # 通过 Click 重新调度到子命令
+    cmd = ctx.command.commands[scenario_key]
+    args = ["--config", config_path, *extra_args]
+    sub_ctx = cmd.make_context(scenario_key, args, parent=ctx)
+    cmd.invoke(sub_ctx)
 
 
 @diagnose_app.command("internet")
@@ -1525,6 +1709,742 @@ def web_run(
     uvicorn.run(web_app_instance, host=host, port=port, reload=reload)
 
 
+# ---------------------------------------------------------------------------
+# 定时任务调度
+# ---------------------------------------------------------------------------
+
+
+@schedule_app.command("list")
+def schedule_list(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """列出所有定时任务。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    engine = SchedulerEngine(config=loaded, store=store)
+    tasks = engine.list_tasks()
+
+    if not tasks:
+        console.print("[dim]没有定时任务。[/dim]")
+        return
+
+    table = Table(title="定时任务")
+    table.add_column("ID")
+    table.add_column("名称")
+    table.add_column("类型")
+    table.add_column("Profile")
+    table.add_column("Cron")
+    table.add_column("启用")
+    table.add_column("上次状态")
+    table.add_column("下次执行")
+    table.add_column("告警级别")
+
+    for task in tasks:
+        table.add_row(
+            task.id,
+            task.name,
+            task.task_type,
+            task.profile,
+            task.cron,
+            "✓" if task.enabled else "✗",
+            task.last_status.value if task.last_status else "-",
+            task.next_run.isoformat() if task.next_run else "-",
+            ",".join(s.value for s in task.alert_on) if task.alert_on else "-",
+        )
+
+    console.print(table)
+
+
+@schedule_app.command("add")
+def schedule_add(
+    name: Annotated[str, typer.Option("--name", help="任务名称。")],
+    cron: Annotated[str, typer.Option("--cron", help="Cron 表达式（分 时 日 月 周）。")],
+    task_type: Annotated[str, typer.Option("--type", help="任务类型：health_check / security_check / asset_scan。")] = "health_check",
+    profile: Annotated[str, typer.Option("--profile", help="巡检/扫描配置 profile 名称。")] = "default",
+    alert_on: Annotated[str, typer.Option("--alert-on", help="触发告警的级别，逗号分隔。")] = "warning,critical",
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """添加一个定时任务。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    alert_levels = [s.strip() for s in alert_on.split(",") if s.strip()]
+
+    try:
+        task = create_scheduled_task(
+            name=name,
+            task_type=task_type,
+            profile=profile,
+            cron=cron,
+            alert_on=alert_levels,
+        )
+    except SchedulerError as exc:
+        console.print(f"[red]创建任务失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    engine = SchedulerEngine(config=loaded, store=store)
+    engine.add_task(task)
+    console.print(f"[green]已添加定时任务：[/green]{task.id}")
+    console.print(f"  名称：{task.name}")
+    console.print(f"  类型：{task.task_type}")
+    console.print(f"  Cron：{task.cron}")
+    console.print(f"  下次执行：{task.next_run.isoformat() if task.next_run else '-'}")
+
+
+@schedule_app.command("remove")
+def schedule_remove(
+    task_id: Annotated[str, typer.Argument(help="任务 ID。")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """删除一个定时任务。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    engine = SchedulerEngine(config=loaded, store=store)
+    removed = engine.remove_task(task_id)
+    if removed:
+        console.print(f"[green]已删除定时任务：[/green]{task_id}")
+    else:
+        console.print(f"[red]任务不存在：[/red]{task_id}")
+        raise typer.Exit(code=1)
+
+
+@schedule_app.command("enable")
+def schedule_enable(
+    task_id: Annotated[str, typer.Argument(help="任务 ID。")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """启用一个定时任务。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    engine = SchedulerEngine(config=loaded, store=store)
+    task = engine.enable_task(task_id)
+    if task:
+        console.print(f"[green]已启用：[/green]{task.name}")
+    else:
+        console.print(f"[red]任务不存在：[/red]{task_id}")
+        raise typer.Exit(code=1)
+
+
+@schedule_app.command("disable")
+def schedule_disable(
+    task_id: Annotated[str, typer.Argument(help="任务 ID。")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """禁用一个定时任务。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    engine = SchedulerEngine(config=loaded, store=store)
+    task = engine.disable_task(task_id)
+    if task:
+        console.print(f"[green]已禁用：[/green]{task.name}")
+    else:
+        console.print(f"[red]任务不存在：[/red]{task_id}")
+        raise typer.Exit(code=1)
+
+
+@schedule_app.command("run-now")
+def schedule_run_now(
+    task_id: Annotated[str, typer.Argument(help="任务 ID。")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """立即执行一次定时任务（不等调度时间）。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    engine = SchedulerEngine(config=loaded, store=store)
+    task = engine.run_task_now(task_id)
+    if task is None:
+        console.print(f"[red]任务不存在：[/red]{task_id}")
+        raise typer.Exit(code=1)
+
+    if task.last_status and task.last_status.value == "success":
+        console.print(f"[green]执行完成：[/green]{task.name}")
+    else:
+        console.print(f"[red]执行失败：[/red]{task.name}")
+        if task.last_error:
+            console.print(f"  错误：{task.last_error}")
+        raise typer.Exit(code=1)
+
+
+@schedule_app.command("run")
+def schedule_run(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+    poll_interval: Annotated[
+        float,
+        typer.Option("--poll-interval", help="轮询间隔（秒）。"),
+    ] = 30.0,
+) -> None:
+    """以阻塞模式运行调度器（无 Web Console）。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    store.ensure_schema()
+    engine = SchedulerEngine(
+        config=loaded, store=store, poll_interval_seconds=poll_interval
+    )
+
+    tasks = engine.list_tasks()
+    console.print(f"[bold green]调度器启动中...[/bold green]")
+    console.print(f"  定时任务数：[cyan]{len(tasks)}[/cyan]")
+    console.print(f"  轮询间隔：[dim]{poll_interval}s[/dim]")
+    console.print(f"  数据库：[dim]{store.path}[/dim]")
+    for task in tasks:
+        console.print(
+            f"  {'✓' if task.enabled else '✗'} {task.name} "
+            f"[dim]{task.cron}[/dim] "
+            f"下次: [dim]{task.next_run.isoformat() if task.next_run else '-'}[/dim]"
+        )
+    console.print(f"  [yellow]按 Ctrl+C 停止[/yellow]")
+
+    try:
+        engine.run_forever()
+    except KeyboardInterrupt:
+        console.print("\n[yellow]调度器已停止。[/yellow]")
+
+
+# ---------------------------------------------------------------------------
+# 告警管理
+# ---------------------------------------------------------------------------
+
+
+@alert_app.command("list")
+def alert_list(
+    status: Annotated[
+        str | None,
+        typer.Option("--status", help="按状态筛选：active / resolved / suppressed。"),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="最多返回条数。"),
+    ] = 50,
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """列出告警事件。"""
+    try:
+        _, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    events = store.list_alert_events(status=status, limit=limit)
+
+    if not events:
+        console.print("[dim]没有告警事件。[/dim]")
+        return
+
+    table = Table(title="告警事件")
+    table.add_column("ID")
+    table.add_column("严重程度")
+    table.add_column("规则")
+    table.add_column("目标")
+    table.add_column("实际值")
+    table.add_column("阈值")
+    table.add_column("状态")
+    table.add_column("已确认")
+    table.add_column("触发时间")
+
+    severity_colors = {
+        "critical": "red",
+        "warning": "yellow",
+        "info": "blue",
+    }
+
+    for event in events:
+        color = severity_colors.get(event.severity.value, "white")
+        table.add_row(
+            event.id,
+            f"[{color}]{event.severity.value.upper()}[/{color}]",
+            event.rule_name,
+            event.target,
+            event.value,
+            event.threshold,
+            event.status.value,
+            "✓" if event.acknowledged else "✗",
+            event.triggered_at.isoformat(),
+        )
+
+    console.print(table)
+
+
+@alert_app.command("acknowledge")
+def alert_acknowledge(
+    event_id: Annotated[str, typer.Argument(help="告警事件 ID。")],
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """确认一个告警事件。"""
+    try:
+        _, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        event = acknowledge_alert_event(event_id=event_id, store=store)
+    except AlertEngineError as exc:
+        console.print(f"[red]确认失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[green]已确认告警：[/green]{event.id}")
+    console.print(f"  规则：{event.rule_name}")
+    console.print(f"  目标：{event.target}")
+    console.print(f"  确认时间：{event.acknowledged_at.isoformat() if event.acknowledged_at else '-'}")
+
+
+@alert_app.command("rules")
+def alert_rules(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """列出已配置的告警规则。"""
+    try:
+        loaded, _ = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    rules = load_rules_from_config(loaded.alert_rules)
+
+    if not rules:
+        console.print("[dim]没有告警规则。[/dim]")
+        return
+
+    table = Table(title="告警规则")
+    table.add_column("ID")
+    table.add_column("名称")
+    table.add_column("探针类型")
+    table.add_column("指标")
+    table.add_column("操作符")
+    table.add_column("阈值")
+    table.add_column("严重程度")
+    table.add_column("冷却(分)")
+    table.add_column("启用")
+
+    for rule in rules:
+        table.add_row(
+            rule.id,
+            rule.name,
+            rule.condition.probe_type,
+            rule.condition.metric,
+            rule.condition.operator,
+            str(rule.condition.threshold),
+            rule.severity.value,
+            str(rule.cooldown_minutes),
+            "✓" if rule.enabled else "✗",
+        )
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
+# 历史趋势分析
+# ---------------------------------------------------------------------------
+
+
+@trend_app.command("targets")
+def trend_targets(
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+    probe_type: Annotated[
+        str | None,
+        typer.Option("--type", help="按探针类型筛选。"),
+    ] = None,
+) -> None:
+    """列出有历史数据的目标。"""
+    try:
+        _, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    targets = list_available_targets(store=store, probe_type=probe_type)
+
+    if not targets:
+        console.print("[dim]没有历史数据。[/dim]")
+        return
+
+    table = Table(title="可用目标")
+    table.add_column("探针类型")
+    table.add_column("目标")
+
+    for t in targets:
+        table.add_row(t["probe_type"], t["target"])
+
+    console.print(table)
+
+
+@trend_app.command("show")
+def trend_show(
+    probe_type: Annotated[str, typer.Argument(help="探针类型：ping / dns / tcp / http / tls_cert。")],
+    target: Annotated[str | None, typer.Option("--target", help="目标筛选。")] = None,
+    metric: Annotated[
+        str | None,
+        typer.Option("--metric", help="指定指标，不指定则返回所有。"),
+    ] = None,
+    days: Annotated[
+        int,
+        typer.Option("--days", help="查询天数范围。"),
+    ] = 7,
+    granularity: Annotated[
+        str,
+        typer.Option("--granularity", help="聚合粒度：daily / hourly。"),
+    ] = "daily",
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """查看趋势详情（含时间序列）。"""
+    try:
+        _, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        trend = get_trend(
+            store=store,
+            probe_type=probe_type,
+            target=target,
+            metric=metric,
+            days=days,
+            granularity=granularity,
+        )
+    except TrendError as exc:
+        console.print(f"[red]查询失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    dist = trend["status_distribution"]
+    console.print(f"\n[bold]探针类型：[/bold]{probe_type}  [bold]目标：[/bold]{target or '全部'}  [bold]范围：[/bold]{days} 天")
+    console.print(
+        f"  总检查数：{dist['total']}  "
+        f"成功率：[green]{dist['success_rate']}%[/green]  "
+        f"失败：[red]{dist['failed_count']}[/red]  "
+        f"超时：[yellow]{dist['timeout_count']}[/yellow]"
+    )
+
+    for m, stats in trend["metric_stats"].items():
+        console.print(f"\n[bold cyan]指标：{m}[/bold cyan]")
+        table = Table(title=f"{m} 趋势")
+        table.add_column("时间")
+        table.add_column("样本数")
+        table.add_column("平均")
+        table.add_column("最小")
+        table.add_column("最大")
+        table.add_column("P95")
+
+        for s in stats:
+            table.add_row(
+                s["time_bucket"],
+                str(s["count"]),
+                str(s["avg"]) if s["avg"] is not None else "-",
+                str(s["min"]) if s["min"] is not None else "-",
+                str(s["max"]) if s["max"] is not None else "-",
+                str(s["p95"]) if s["p95"] is not None else "-",
+            )
+
+        console.print(table)
+
+
+@trend_app.command("summary")
+def trend_summary(
+    probe_type: Annotated[str, typer.Argument(help="探针类型。")],
+    target: Annotated[str | None, typer.Option("--target", help="目标筛选。")] = None,
+    days: Annotated[
+        int,
+        typer.Option("--days", help="查询天数范围。"),
+    ] = 7,
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """查看趋势摘要（快速概览）。"""
+    try:
+        _, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        summary = get_trend_summary(
+            store=store,
+            probe_type=probe_type,
+            target=target,
+            days=days,
+        )
+    except TrendError as exc:
+        console.print(f"[red]查询失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"\n[bold]趋势摘要：[/bold]{probe_type} / {target or '全部'} / {days} 天")
+    console.print(f"  总检查数：{summary['total_checks']}")
+    console.print(f"  成功率：[green]{summary['success_rate']}%[/green]")
+    console.print(f"  失败：[red]{summary['failed_count']}[/red]  超时：[yellow]{summary['timeout_count']}[/yellow]")
+
+    if summary["metrics"]:
+        table = Table(title="指标汇总")
+        table.add_column("指标")
+        table.add_column("数据点")
+        table.add_column("平均")
+        table.add_column("最小")
+        table.add_column("最大")
+        table.add_column("P95均值")
+
+        for m, stats in summary["metrics"].items():
+            table.add_row(
+                m,
+                str(stats["data_points"]),
+                str(stats["avg"]) if stats["avg"] is not None else "-",
+                str(stats["min"]) if stats["min"] is not None else "-",
+                str(stats["max"]) if stats["max"] is not None else "-",
+                str(stats["p95_avg"]) if stats["p95_avg"] is not None else "-",
+            )
+        console.print(table)
+    else:
+        console.print("[dim]无数值型指标数据。[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# AI 运维助手
+# ---------------------------------------------------------------------------
+
+
+@ai_app.command("summarize")
+def ai_summarize(
+    task_id: Annotated[str, typer.Argument(help="任务 ID。")],
+    prompt: Annotated[
+        str | None,
+        typer.Option("--prompt", help="自定义提示词。"),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """对指定任务生成 AI 摘要。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        output = summarize_task(
+            task_id=task_id,
+            store=store,
+            config=loaded,
+            prompt=prompt,
+        )
+    except AIAdapterError as exc:
+        console.print(f"[red]AI 摘要失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    _print_ai_output(output)
+
+
+@ai_app.command("explain")
+def ai_explain(
+    task_id: Annotated[str, typer.Argument(help="任务 ID。")],
+    question: Annotated[
+        str | None,
+        typer.Option("--question", help="自然语言提问。"),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """解释指定任务中的异常。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        output = explain_anomaly(
+            task_id=task_id,
+            store=store,
+            config=loaded,
+            question=question,
+        )
+    except AIAdapterError as exc:
+        console.print(f"[red]AI 解释失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    _print_ai_output(output)
+
+
+@ai_app.command("weekly")
+def ai_weekly(
+    days: Annotated[
+        int,
+        typer.Option("--days", help="汇总天数。"),
+    ] = 7,
+    prompt: Annotated[
+        str | None,
+        typer.Option("--prompt", help="自定义提示词。"),
+    ] = None,
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """生成 AI 周报摘要。"""
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        output = summarize_recent(
+            store=store,
+            config=loaded,
+            days=days,
+            prompt=prompt,
+        )
+    except AIAdapterError as exc:
+        console.print(f"[red]AI 周报失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    _print_ai_output(output)
+
+
+@ai_app.command("logs")
+def ai_logs(
+    task_id: Annotated[
+        str | None,
+        typer.Option("--task", help="按任务 ID 筛选。"),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option("--limit", help="最多返回条数。"),
+    ] = 50,
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """查看 AI 调用审计日志。"""
+    try:
+        _, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    logs = store.list_ai_call_logs(task_id=task_id, limit=limit)
+
+    if not logs:
+        console.print("[dim]没有 AI 调用记录。[/dim]")
+        return
+
+    table = Table(title="AI 调用日志")
+    table.add_column("ID")
+    table.add_column("任务 ID")
+    table.add_column("后端")
+    table.add_column("成功")
+    table.add_column("耗时(ms)")
+    table.add_column("错误")
+    table.add_column("时间")
+
+    for log in logs:
+        table.add_row(
+            log.id,
+            log.task_id,
+            log.backend,
+            "✓" if log.success else "✗",
+            str(log.duration_ms),
+            log.error or "-",
+            log.called_at.isoformat(),
+        )
+
+    console.print(table)
+
+
+def _print_ai_output(output: AIOutput) -> None:
+    """格式化输出 AI 结果。"""
+    console.print(f"\n[bold]摘要：[/bold]{output.summary}")
+    console.print(f"  后端：[cyan]{output.backend}[/cyan]  置信度：{output.confidence}  耗时：{output.duration_ms or '-'}ms")
+
+    if output.facts:
+        console.print(f"\n[bold green]事实：[/bold green]")
+        for i, fact in enumerate(output.facts, 1):
+            console.print(f"  {i}. {fact}")
+
+    if output.inferences:
+        console.print(f"\n[bold yellow]推断：[/bold yellow]")
+        for i, inf in enumerate(output.inferences, 1):
+            console.print(f"  {i}. {inf}")
+
+    if output.recommendations:
+        console.print(f"\n[bold blue]建议：[/bold blue]")
+        for i, rec in enumerate(output.recommendations, 1):
+            console.print(f"  {i}. {rec}")
+
+    if output.needs_human_review:
+        console.print(f"\n[bold red]⚠ 需要人工确认[/bold red]")
+
+    if output.sources:
+        console.print(f"\n[dim]引用来源：{', '.join(output.sources)}[/dim]")
+
+
 def _store_from_config(config_path: Path) -> SQLiteStore:
     loaded, store = _load_config_and_store(config_path)
     return store
@@ -1612,3 +2532,572 @@ def _certificate_summary_title(result, findings) -> str:
     if result.status.value != "success":
         return "TLS 证书检查失败"
     return "TLS 证书有效"
+
+
+# ---------------------------------------------------------------------------
+# Phase 8：网络拓扑与资产关系
+# ---------------------------------------------------------------------------
+
+
+@topology_app.command("show")
+def topology_show(
+    traceroute_target: str = typer.Option(
+        None, "--traceroute", "-t", help="可选：对指定目标执行 traceroute"
+    ),
+    max_hops: int = typer.Option(15, "--max-hops", help="traceroute 最大跳数"),
+    reconcile: bool = typer.Option(
+        True, "--reconcile/--no-reconcile", help="是否与资产库对比"
+    ),
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="输出格式：table | json"
+    ),
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """展示本机视角的网络拓扑。"""
+    from .topology import get_topology
+
+    store = None
+    if reconcile:
+        try:
+            store = _store_from_config(config)
+        except ConfigError as exc:
+            console.print(f"[red]读取配置失败：[/red]{exc}")
+            raise typer.Exit(code=1) from exc
+
+    view = get_topology(
+        store=store,
+        traceroute_target=traceroute_target,
+        max_hops=max_hops,
+    )
+
+    if output_format == "json":
+        typer.echo(view.model_dump_json(indent=2))
+        return
+
+    _print_topology_table(view)
+
+
+@topology_app.command("arp")
+def topology_arp(
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="输出格式：table | json"
+    ),
+) -> None:
+    """采集并展示本机 ARP 表。"""
+    from .probes.arp import collect_arp_table
+
+    entries = collect_arp_table()
+
+    if output_format == "json":
+        import json
+
+        typer.echo(
+            json.dumps([e.model_dump() for e in entries], indent=2, ensure_ascii=False)
+        )
+        return
+
+    if not entries:
+        typer.echo("ARP 表为空。")
+        return
+
+    typer.echo(f"共 {len(entries)} 条 ARP 记录：\n")
+    typer.echo(f"{'IP':<18} {'MAC':<20} {'接口':<16} {'状态':<10} {'厂商':<20} {'类型'}")
+    typer.echo("-" * 100)
+    for e in entries:
+        typer.echo(
+            f"{e.ip:<18} {e.mac:<20} {e.interface:<16} {e.state:<10} "
+            f"{(e.vendor or 'Unknown'):<20} {(e.device_type or 'unknown')}"
+        )
+
+
+@topology_app.command("unknown")
+def topology_unknown(
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="输出格式：table | json"
+    ),
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """检测 ARP 表中不在资产库的未知设备。"""
+    from .probes.arp import collect_arp_table
+    from .topology import detect_unknown_devices
+
+    try:
+        store = _store_from_config(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    arp_entries = collect_arp_table()
+    unknown = detect_unknown_devices(arp_entries=arp_entries, store=store)
+
+    if output_format == "json":
+        import json
+
+        typer.echo(
+            json.dumps([e.model_dump() for e in unknown], indent=2, ensure_ascii=False)
+        )
+        return
+
+    if not unknown:
+        typer.echo("未发现未知设备。")
+        return
+
+    typer.echo(f"⚠️  发现 {len(unknown)} 个未知设备：\n")
+    typer.echo(f"{'IP':<18} {'MAC':<20} {'厂商':<20} {'类型'}")
+    typer.echo("-" * 70)
+    for e in unknown:
+        typer.echo(
+            f"{e.ip:<18} {e.mac:<20} {(e.vendor or 'Unknown'):<20} {(e.device_type or 'unknown')}"
+        )
+
+
+@probe_app.command("traceroute")
+def probe_traceroute(
+    target: str = typer.Argument(..., help="目标主机（IP 或主机名）"),
+    max_hops: int = typer.Option(15, "--max-hops", "-m", help="最大跳数"),
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="输出格式：table | json"
+    ),
+) -> None:
+    """执行路由追踪。"""
+    from .probes.traceroute import run_traceroute
+
+    result = run_traceroute(target=target, max_hops=max_hops)
+
+    if output_format == "json":
+        typer.echo(result.model_dump_json(indent=2))
+        return
+
+    typer.echo(f"路由追踪：{result.source} → {result.target}")
+    typer.echo(f"总跳数：{result.total_hops}  到达：{'是' if result.reached else '否'}\n")
+    typer.echo(f"{'跳数':<6} {'IP':<18} {'RTT (ms)':<30} {'状态'}")
+    typer.echo("-" * 70)
+    for hop in result.hops:
+        if hop.timeout:
+            typer.echo(f"{hop.hop:<6} {'*':<18} {'* * *':<30} 超时")
+        else:
+            rtt_str = "  ".join(f"{r:.1f}" for r in hop.rtt_ms) if hop.rtt_ms else "-"
+            typer.echo(f"{hop.hop:<6} {(hop.ip or '*'):<18} {rtt_str:<30} 正常")
+
+
+@probe_app.command("snmp")
+def probe_snmp(
+    target: Annotated[
+        str,
+        typer.Argument(help="目标设备 IP 地址。"),
+    ],
+    community: Annotated[
+        str,
+        typer.Option("--community", help="SNMP community 字符串。"),
+    ] = "public",
+    port: Annotated[
+        int,
+        typer.Option("--port", help="SNMP UDP 端口。"),
+    ] = 161,
+    oid: Annotated[
+        str,
+        typer.Option("--oid", help="查询单个 OID（不指定则采集设备基础信息）。"),
+    ] = "",
+    timeout_ms: Annotated[
+        int,
+        typer.Option("--timeout", help="超时时间（毫秒）。"),
+    ] = 3000,
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """通过 SNMP v2c 采集设备信息或查询单个 OID。"""
+    from .probes.snmp import collect_snmp_info, snmp_get, SnmpError
+
+    if oid:
+        # 查询单个 OID
+        try:
+            resp_oid, value = snmp_get(
+                target=target,
+                oid=oid,
+                community=community,
+                port=port,
+                timeout_ms=timeout_ms,
+            )
+            console.print(f"[green]SNMP GET 成功[/green]")
+            console.print(f"  OID: {resp_oid}")
+            console.print(f"  值: {value}")
+        except SnmpError as exc:
+            console.print(f"[red]SNMP GET 失败：[/red]{exc}")
+            raise typer.Exit(code=1) from exc
+        return
+
+    # 采集设备基础信息
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    task = new_task_run(task_type="snmp_probe")
+    store.save_task_run(task)
+
+    result = collect_snmp_info(
+        task_id=task.id,
+        target=target,
+        community=community,
+        port=port,
+        timeout_ms=timeout_ms,
+    )
+    store.save_probe_result(result)
+
+    task = finish_task_run(
+        task,
+        status=TaskStatus.success if result.status == "success" else TaskStatus.failed,
+    )
+    task = task.model_copy(update={"result_refs": [result.id]})
+    store.save_task_run(task)
+
+    if result.status != "success":
+        console.print(f"[red]SNMP 采集失败：[/red]{result.error.message if result.error else '未知错误'}")
+        raise typer.Exit(code=1)
+
+    obs = result.observations
+    console.print(f"[green]SNMP 设备信息采集完成[/green]  任务 ID: {task.id}")
+    console.print()
+
+    table = Table(title=f"SNMP 设备信息 — {target}")
+    table.add_column("属性", style="cyan")
+    table.add_column("值")
+    table.add_row("sysDescr", str(obs.get("sysDescr", "-")))
+    table.add_row("sysName", str(obs.get("sysName", "-")))
+    table.add_row("sysObjectID", str(obs.get("sysObjectID", "-")))
+    table.add_row("sysUpTime", str(obs.get("sysUpTime", "-")))
+    table.add_row("sysContact", str(obs.get("sysContact", "-")))
+    table.add_row("sysLocation", str(obs.get("sysLocation", "-")))
+    table.add_row("sysServices", str(obs.get("sysServices", "-")))
+    table.add_row("接口数量", str(obs.get("interface_count", "-")))
+
+    console.print(table)
+
+    # 接口列表
+    interfaces = obs.get("interfaces", [])
+    if interfaces:
+        console.print()
+        iface_table = Table(title="接口列表")
+        iface_table.add_column("序号")
+        iface_table.add_column("描述")
+        iface_table.add_column("状态")
+        for iface in interfaces:
+            status_str = str(iface.get("oper_status", "-"))
+            # SNMP ifOperStatus: 1=up, 2=down, 3=testing
+            if status_str == "1":
+                status_str = "[green]up[/green]"
+            elif status_str == "2":
+                status_str = "[red]down[/red]"
+            elif status_str == "3":
+                status_str = "[yellow]testing[/yellow]"
+            iface_table.add_row(
+                str(iface.get("index", "-")),
+                str(iface.get("descr", "-")),
+                status_str,
+            )
+        console.print(iface_table)
+
+
+def _print_topology_table(view) -> None:
+    """以表格形式打印拓扑视图。"""
+    typer.echo("=" * 70)
+    typer.echo("网络拓扑视图（本机视角）")
+    typer.echo("=" * 70)
+
+    typer.echo(f"\n本机 IP：{view.source}")
+    typer.echo(f"默认网关：{view.gateway or '未检测到'}")
+
+    # 网络接口
+    if view.interfaces:
+        typer.echo("\n── 网络接口 ──")
+        for iface in view.interfaces:
+            typer.echo(
+                f"  {iface.get('name', '?')}: {iface.get('ip', 'N/A')}"
+            )
+
+    # ARP 表
+    if view.arp_entries:
+        typer.echo(f"\n── ARP 表（{len(view.arp_entries)} 条）──")
+        typer.echo(
+            f"  {'IP':<16} {'MAC':<20} {'厂商':<20} {'类型'}"
+        )
+        typer.echo(f"  {'-'*66}")
+        for e in view.arp_entries:
+            typer.echo(
+                f"  {e.ip:<16} {e.mac:<20} {(e.vendor or 'Unknown'):<20} "
+                f"{(e.device_type or 'unknown')}"
+            )
+
+    # Traceroute
+    if view.traceroute:
+        tr = view.traceroute
+        typer.echo(f"\n── Traceroute: {tr.source} → {tr.target} ──")
+        typer.echo(f"  总跳数：{tr.total_hops}  到达：{'是' if tr.reached else '否'}")
+        for hop in tr.hops:
+            if hop.timeout:
+                typer.echo(f"  Hop {hop.hop}: * * * (超时)")
+            else:
+                rtt = "  ".join(f"{r:.1f}ms" for r in hop.rtt_ms) if hop.rtt_ms else "-"
+                typer.echo(f"  Hop {hop.hop}: {hop.ip}  {rtt}")
+
+    # 资产对比
+    if view.reconciliation:
+        rec = view.reconciliation
+        typer.echo("\n── 资产对比 ──")
+        typer.echo(f"  匹配设备：{len(rec.matched)}")
+        typer.echo(f"  新设备（ARP 有、资产库无）：{len(rec.new_devices)}")
+        typer.echo(f"  离线设备（资产库有、ARP 无）：{len(rec.offline_devices)}")
+        typer.echo(f"  未知厂商：{len(rec.unknown_vendors)}")
+
+        if rec.new_devices:
+            typer.echo("\n  ⚠️ 新设备：")
+            for d in rec.new_devices:
+                typer.echo(
+                    f"    {d.ip}  {d.mac}  {d.vendor or 'Unknown'}"
+                )
+
+        if rec.offline_devices:
+            typer.echo("\n  💤 离线设备：")
+            for d in rec.offline_devices:
+                typer.echo(f"    {d.ip}  {d.hostname or d.mac or 'N/A'}")
+
+    typer.echo("\n" + "=" * 70)
+
+
+# ---------------------------------------------------------------------------
+# Phase 9：受控 Agent 工作流
+# ---------------------------------------------------------------------------
+
+
+@workflow_app.command("list")
+def workflow_list(
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="输出格式：table | json"
+    ),
+) -> None:
+    """列出所有可用工作流。"""
+    from .agent_workflow import get_builtin_workflows
+
+    workflows = get_builtin_workflows()
+
+    if output_format == "json":
+        import json
+
+        typer.echo(
+            json.dumps(
+                [w.model_dump() for w in workflows], indent=2, ensure_ascii=False
+            )
+        )
+        return
+
+    typer.echo(f"共 {len(workflows)} 个可用工作流：\n")
+    for wf in workflows:
+        typer.echo(f"  📋 {wf.name}")
+        typer.echo(f"     {wf.description}")
+        typer.echo(f"     步骤：{' → '.join(s.id for s in wf.steps)}")
+        typer.echo(f"     触发：{', '.join(wf.triggers)}")
+        typer.echo()
+
+
+@workflow_app.command("run")
+def workflow_run(
+    name: str = typer.Argument(..., help="工作流名称"),
+    confirm: bool = typer.Option(
+        False, "--confirm", help="自动批准低风险变更步骤"
+    ),
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="输出格式：table | json"
+    ),
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """执行指定工作流。"""
+    from .agent_workflow import (
+        WorkflowError,
+        execute_workflow,
+        get_workflow_by_name,
+    )
+
+    try:
+        loaded, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    try:
+        wf = get_workflow_by_name(name)
+    except WorkflowError as exc:
+        console.print(f"[red]工作流不存在：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[bold]开始执行工作流：[/bold]{wf.name}")
+    console.print(f"  {wf.description}\n")
+
+    execution = execute_workflow(
+        workflow=wf,
+        store=store,
+        config=loaded,
+        trigger="cli",
+        auto_approve_low_risk=confirm,
+    )
+
+    if output_format == "json":
+        typer.echo(execution.model_dump_json(indent=2))
+        return
+
+    _print_workflow_execution(execution)
+
+
+@workflow_app.command("show")
+def workflow_show(
+    execution_id: str = typer.Argument(..., help="工作流执行 ID"),
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="输出格式：table | json"
+    ),
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """查看工作流执行详情。"""
+    try:
+        _, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    execution = store.get_workflow_execution(execution_id)
+    if execution is None:
+        console.print(f"[red]执行记录不存在：[/red]{execution_id}")
+        raise typer.Exit(code=1)
+
+    if output_format == "json":
+        typer.echo(execution.model_dump_json(indent=2))
+        return
+
+    _print_workflow_execution(execution)
+
+
+@workflow_app.command("history")
+def workflow_history(
+    workflow_name: str | None = typer.Option(
+        None, "--name", "-n", help="按工作流名称筛选"
+    ),
+    status: str | None = typer.Option(
+        None, "--status", "-s", help="按状态筛选"
+    ),
+    limit: int = typer.Option(20, "--limit", help="最多返回条数"),
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="输出格式：table | json"
+    ),
+    config: Annotated[
+        Path,
+        typer.Option("--config", "-c", help="配置文件路径。"),
+    ] = DEFAULT_CONFIG_PATH,
+) -> None:
+    """查看工作流执行历史。"""
+    try:
+        _, store = _load_config_and_store(config)
+    except ConfigError as exc:
+        console.print(f"[red]读取配置失败：[/red]{exc}")
+        raise typer.Exit(code=1) from exc
+
+    executions = store.list_workflow_executions(
+        limit=limit,
+        workflow_name=workflow_name,
+        status=status,
+    )
+
+    if output_format == "json":
+        import json
+
+        typer.echo(
+            json.dumps(
+                [e.model_dump(mode="json") for e in executions],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return
+
+    if not executions:
+        typer.echo("没有工作流执行记录。")
+        return
+
+    typer.echo(f"共 {len(executions)} 条执行记录：\n")
+    typer.echo(
+        f"{'ID':<20} {'工作流':<25} {'状态':<10} {'触发':<8} {'开始时间':<25} {'摘要'}"
+    )
+    typer.echo("-" * 120)
+    for e in executions:
+        typer.echo(
+            f"{e.id:<20} {e.workflow_name:<25} {e.status.value:<10} "
+            f"{e.trigger:<8} {e.started_at.isoformat():<25} "
+            f"{e.result_summary or '-'}"
+        )
+
+
+def _print_workflow_execution(execution) -> None:
+    """格式化输出工作流执行结果。"""
+    status_colors = {
+        "success": "green",
+        "failed": "red",
+        "running": "yellow",
+        "paused": "cyan",
+        "cancelled": "dim",
+        "pending": "dim",
+    }
+    color = status_colors.get(execution.status.value, "white")
+
+    typer.echo("=" * 70)
+    typer.echo(f"工作流执行：{execution.id}")
+    typer.echo(f"  名称：{execution.workflow_name}")
+    typer.echo(f"  状态：{execution.status.value}")
+    typer.echo(f"  触发：{execution.trigger}")
+    typer.echo(f"  开始：{execution.started_at.isoformat()}")
+    if execution.ended_at:
+        typer.echo(f"  结束：{execution.ended_at.isoformat()}")
+    typer.echo()
+
+    typer.echo("── 执行步骤 ──")
+    for step in execution.steps:
+        step_color = status_colors.get(step.status.value, "white")
+        icon = {
+            "success": "✓",
+            "failed": "✗",
+            "skipped": "⊘",
+            "awaiting_approval": "⏸",
+            "rejected": "✗",
+            "pending": "○",
+            "running": "→",
+            "approved": "✓",
+        }.get(step.status.value, "?")
+
+        typer.echo(
+            f"  {icon} {step.step_id:<25} {step.action:<25} "
+            f"[{step.status.value}] ({step.risk_level.value})"
+        )
+
+        if step.error:
+            typer.echo(f"      错误：{step.error}")
+
+        if step.result:
+            for k, v in step.result.items():
+                if k != "task_id":
+                    typer.echo(f"      {k}: {v}")
+
+    if execution.result_summary:
+        typer.echo(f"\n  摘要：{execution.result_summary}")
+
+    typer.echo("\n" + "=" * 70)

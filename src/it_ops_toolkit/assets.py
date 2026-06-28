@@ -7,6 +7,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from ipaddress import ip_network
 from pathlib import Path
+from typing import Callable
 
 from .config import OpsConfig, ScanProfile
 from .models import Asset, Finding, ProbeResult, ProbeStatus, Severity, TaskRun
@@ -14,6 +15,9 @@ from .probes import check_tcp_port, ping_host
 from .storage import SQLiteStore
 
 MAX_SCAN_HOSTS = 1024
+
+# 进度回调类型
+ProgressCallback = Callable[[str, int, int], None]
 
 
 class AssetScanError(RuntimeError):
@@ -35,6 +39,7 @@ def run_asset_scan(
     task: TaskRun,
     store: SQLiteStore,
     tcp_without_ping: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[list[Asset], list[ProbeResult]]:
     profile = _get_scan_profile(config, profile_name)
     hosts = expand_scan_hosts(profile)
@@ -43,14 +48,14 @@ def run_asset_scan(
             f"scan profile expands to {len(hosts)} hosts; limit is {MAX_SCAN_HOSTS}"
         )
 
-    ping_results = _run_ping_checks(config, profile, task, hosts)
+    ping_results = _run_ping_checks(config, profile, task, hosts, progress_callback)
     active_hosts = [
         result.target.value
         for result in ping_results
         if result.status == ProbeStatus.success and result.observations.get("reachable")
     ]
     tcp_hosts = hosts if tcp_without_ping else active_hosts
-    tcp_results = _run_tcp_checks(config, profile, task, tcp_hosts)
+    tcp_results = _run_tcp_checks(config, profile, task, tcp_hosts, progress_callback)
     results = [*ping_results, *tcp_results]
 
     open_ports_by_host: dict[str, list[int]] = {host: [] for host in active_hosts}
@@ -426,11 +431,14 @@ def _run_ping_checks(
     profile: ScanProfile,
     task: TaskRun,
     hosts: list[str],
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ProbeResult]:
     if not profile.ping.enabled:
         return []
 
     workers = min(config.probe_defaults.concurrency, max(len(hosts), 1))
+    total = len(hosts)
+    completed = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(
@@ -442,7 +450,13 @@ def _run_ping_checks(
             )
             for host in hosts
         ]
-        return [future.result() for future in as_completed(futures)]
+        results = []
+        for future in as_completed(futures):
+            completed += 1
+            if progress_callback:
+                progress_callback(f"ping 扫描", completed, total)
+            results.append(future.result())
+        return results
 
 
 def _run_tcp_checks(
@@ -450,6 +464,7 @@ def _run_tcp_checks(
     profile: ScanProfile,
     task: TaskRun,
     hosts: list[str],
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ProbeResult]:
     if not hosts or not profile.tcp_ports:
         return []
@@ -457,6 +472,8 @@ def _run_tcp_checks(
     timeout_ms = config.probe_defaults.timeout_ms
     jobs = [(host, port) for host in hosts for port in profile.tcp_ports]
     workers = min(config.probe_defaults.concurrency, max(len(jobs), 1))
+    total = len(jobs)
+    completed = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(
@@ -468,7 +485,13 @@ def _run_tcp_checks(
             )
             for host, port in jobs
         ]
-        return [future.result() for future in as_completed(futures)]
+        results = []
+        for future in as_completed(futures):
+            completed += 1
+            if progress_callback:
+                progress_callback(f"TCP 端口扫描", completed, total)
+            results.append(future.result())
+        return results
 
 
 def _write_assets_csv(path: Path, assets: list[Asset]) -> None:

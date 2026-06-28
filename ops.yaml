@@ -1,0 +1,113 @@
+app:
+  name: IT Ops Toolkit
+  environment: local
+scan_profiles:
+  office_lan:
+    description: 办公网段基础扫描
+    subnets:
+    - 192.168.1.0/24
+    ping:
+      enabled: true
+      timeout_ms: 1000
+      retries: 1
+    tcp_ports:
+    - 22
+    - 80
+    - 443
+    - 445
+    - 3389
+health_profiles:
+  daily_basic:
+    description: 每日基础巡检
+    targets:
+    - name: 默认网关
+      type: ip
+      value: 192.168.1.1
+      checks:
+      - ping
+    - name: DNS 基础解析
+      type: hostname
+      value: www.baidu.com
+      checks:
+      - dns
+    - name: 内网业务系统
+      type: url
+      value: https://intranet.example.local
+      checks:
+      - http
+probe_defaults:
+  timeout_ms: 1000
+  retries: 1
+  concurrency: 32
+reports:
+  output_dir: ./reports
+  formats:
+  - markdown
+  - csv
+storage:
+  type: sqlite
+  path: ./data/ops.sqlite
+security:
+  risky_ports:
+  - 22
+  - 445
+  - 1433
+  - 3306
+  - 3389
+  - 6379
+schedules:
+- name: 每日早巡检
+  task_type: health_check
+  profile: daily_basic
+  cron: 0 8 * * *
+  enabled: true
+  alert_on:
+  - warning
+  - critical
+alert_rules:
+- id: ping-packet-loss
+  name: Ping 丢包率超 10%
+  enabled: true
+  condition:
+    probe_type: ping
+    metric: packet_loss_percent
+    operator: gt
+    threshold: 10
+  severity: warning
+  cooldown_minutes: 60
+- id: cert-expiring
+  name: 证书 14 天内过期
+  enabled: true
+  condition:
+    probe_type: tls_cert
+    metric: days_remaining
+    operator: lt
+    threshold: 14
+  severity: critical
+  cooldown_minutes: 1440
+- id: port-down
+  name: TCP 端口不通
+  enabled: true
+  condition:
+    probe_type: tcp
+    metric: status
+    operator: eq
+    threshold: failed
+  severity: critical
+  cooldown_minutes: 30
+notifications:
+  channels: []
+ai:
+  backend: template
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    model: gpt-4o-mini
+    base_url: null
+    timeout_seconds: 30
+  ollama:
+    host: http://localhost:11434
+    model: qwen2.5:7b
+    timeout_seconds: 30
+  template:
+    rules_dir: null
+  timeout_seconds: 30

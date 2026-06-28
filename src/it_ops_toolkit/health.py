@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from typing import Callable
 from urllib.parse import urlparse
 
 from .config import HealthTarget, OpsConfig
 from .models import ProbeResult, TaskRun
 from .probes import check_http_url, check_tcp_port, ping_host, resolve_hostname
 from .storage import SQLiteStore
+
+
+# 进度回调类型：(描述, 当前序号, 总数) -> None
+ProgressCallback = Callable[[str, int, int], None]
 
 
 class HealthCheckError(RuntimeError):
@@ -18,15 +23,23 @@ def run_health_check(
     profile_name: str,
     task: TaskRun,
     store: SQLiteStore,
+    progress_callback: ProgressCallback | None = None,
 ) -> list[ProbeResult]:
     try:
         profile = config.health_profiles[profile_name]
     except KeyError as exc:
         raise HealthCheckError(f"health profile not found: {profile_name}") from exc
 
+    # 预计算总检查数
+    total = sum(len(target.checks) for target in profile.targets)
     results: list[ProbeResult] = []
+    index = 0
     for target in profile.targets:
         for check in target.checks:
+            index += 1
+            if progress_callback:
+                desc = f"{check} -> {target.value}"
+                progress_callback(desc, index, total)
             result = _run_target_check(config, task, target, check)
             if result:
                 store.save_probe_result(result)

@@ -80,6 +80,30 @@ class CliTests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         self.assertIn("--file", result.output)
 
+    def test_diagnose_interactive_guide_shows_scenarios(self) -> None:
+        """交互式诊断引导在不指定子命令时应显示场景列表。"""
+        result = self.runner.invoke(app, ["diagnose"], input="n\n")
+
+        # 交互式引导会先打印场景列表，然后询问配置路径，最后确认执行
+        self.assertIn("交互式诊断引导", result.output)
+        self.assertIn("互联网连通性诊断", result.output)
+        self.assertIn("DNS 诊断", result.output)
+
+    def test_diagnose_interactive_guide_cancel(self) -> None:
+        """交互式诊断引导在确认步骤选择否时应退出。"""
+        # 输入：1（选择互联网诊断），回车（默认配置路径），回车×3（默认参数），n（取消）
+        result = self.runner.invoke(
+            app, ["diagnose"], input="1\n\n\n\n\nn\n"
+        )
+
+        self.assertIn("已取消", result.output)
+
+    def test_health_check_help_shows_profile(self) -> None:
+        result = self.runner.invoke(app, ["health", "check", "--help"])
+
+        self.assertEqual(result.exit_code, 0)
+        self.assertIn("--profile", result.output)
+
 
 if __name__ == "__main__":
     unittest.main()

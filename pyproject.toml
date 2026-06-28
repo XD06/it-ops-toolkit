@@ -53,6 +53,9 @@ web = [
   "fastapi>=0.110",
   "uvicorn>=0.29",
 ]
+build = [
+  "pyinstaller>=6",
+]
 
 [project.scripts]
 ops = "it_ops_toolkit.cli:main"

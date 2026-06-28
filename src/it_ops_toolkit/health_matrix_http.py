@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import csv
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .config import OpsConfig
 from .models import ProbeResult, TaskRun
 from .probes import check_http_url
 from .storage import SQLiteStore
+
+
+# 进度回调类型
+ProgressCallback = Callable[[str, int, int], None]
 
 
 class HealthHttpMatrixError(RuntimeError):
@@ -20,12 +24,16 @@ def run_health_http_matrix(
     task: TaskRun,
     store: SQLiteStore,
     csv_path: Path,
+    progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
     rows = _read_targets(csv_path)
     results: list[ProbeResult] = []
     entries: list[dict[str, Any]] = []
+    total = len(rows)
 
-    for row in rows:
+    for i, row in enumerate(rows):
+        if progress_callback:
+            progress_callback(f"HTTP -> {row['url']}", i + 1, total)
         entry: dict[str, Any] = {
             "row": row["row"],
             "name": row["name"],

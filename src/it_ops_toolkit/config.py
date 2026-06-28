@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from pathlib import Path
 from typing import Any, Literal
 
@@ -80,6 +82,91 @@ class SecurityConfig(BaseModel):
         return ports
 
 
+# ---------------------------------------------------------------------------
+# Phase 5：调度 / 告警 / 通知配置
+# ---------------------------------------------------------------------------
+
+_ENV_PATTERN = re.compile(r"\$\{(\w+)\}")
+
+
+def _expand_env(value: Any) -> Any:
+    """递归展开字符串中的 ${ENV_VAR} 占位符。"""
+    if isinstance(value, str):
+        return _ENV_PATTERN.sub(
+            lambda m: os.environ.get(m.group(1), ""), value
+        )
+    if isinstance(value, dict):
+        return {k: _expand_env(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_env(item) for item in value]
+    return value
+
+
+class ScheduleItemConfig(BaseModel):
+    name: str
+    task_type: Literal["health_check", "security_check", "asset_scan"] = "health_check"
+    profile: str = "default"
+    cron: str
+    enabled: bool = True
+    alert_on: list[str] = Field(default_factory=lambda: ["warning", "critical"])
+
+
+class AlertRuleConditionConfig(BaseModel):
+    probe_type: Literal["ping", "dns", "tcp", "http", "tls_cert"]
+    metric: str
+    operator: Literal["gt", "lt", "eq", "ne", "gte", "lte"]
+    threshold: float | str
+
+
+class AlertRuleItemConfig(BaseModel):
+    id: str
+    name: str
+    enabled: bool = True
+    condition: AlertRuleConditionConfig
+    severity: Literal["info", "warning", "critical"] = "warning"
+    cooldown_minutes: int = 60
+
+
+class NotificationChannelConfig(BaseModel):
+    type: Literal["email", "webhook", "wecom", "dingtalk", "feishu"]
+    enabled: bool = True
+    config: dict[str, Any] = Field(default_factory=dict)
+
+
+class NotificationsConfig(BaseModel):
+    channels: list[NotificationChannelConfig] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Phase 7：AI 配置
+# ---------------------------------------------------------------------------
+
+
+class OpenAIConfig(BaseModel):
+    api_key: str = ""
+    model: str = "gpt-4o-mini"
+    base_url: str | None = None
+    timeout_seconds: int = 30
+
+
+class OllamaConfig(BaseModel):
+    host: str = "http://localhost:11434"
+    model: str = "qwen2.5:7b"
+    timeout_seconds: int = 30
+
+
+class TemplateAIConfig(BaseModel):
+    rules_dir: str | None = None
+
+
+class AIConfig(BaseModel):
+    backend: Literal["openai", "ollama", "template"] = "template"
+    openai: OpenAIConfig = Field(default_factory=OpenAIConfig)
+    ollama: OllamaConfig = Field(default_factory=OllamaConfig)
+    template: TemplateAIConfig = Field(default_factory=TemplateAIConfig)
+    timeout_seconds: int = 30
+
+
 class AppConfig(BaseModel):
     name: str = "IT Ops Toolkit"
     environment: str = "local"
@@ -93,6 +180,10 @@ class OpsConfig(BaseModel):
     reports: ReportsConfig = Field(default_factory=ReportsConfig)
     storage: StorageConfig = Field(default_factory=StorageConfig)
     security: SecurityConfig = Field(default_factory=SecurityConfig)
+    schedules: list[ScheduleItemConfig] = Field(default_factory=list)
+    alert_rules: list[AlertRuleItemConfig] = Field(default_factory=list)
+    notifications: NotificationsConfig = Field(default_factory=NotificationsConfig)
+    ai: AIConfig = Field(default_factory=AIConfig)
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -153,6 +244,78 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "security": {
         "risky_ports": [22, 445, 1433, 3306, 3389, 6379],
     },
+    "schedules": [
+        {
+            "name": "每日早巡检",
+            "task_type": "health_check",
+            "profile": "daily_basic",
+            "cron": "0 8 * * *",
+            "enabled": True,
+            "alert_on": ["warning", "critical"],
+        },
+    ],
+    "alert_rules": [
+        {
+            "id": "ping-packet-loss",
+            "name": "Ping 丢包率超 10%",
+            "enabled": True,
+            "condition": {
+                "probe_type": "ping",
+                "metric": "packet_loss_percent",
+                "operator": "gt",
+                "threshold": 10,
+            },
+            "severity": "warning",
+            "cooldown_minutes": 60,
+        },
+        {
+            "id": "cert-expiring",
+            "name": "证书 14 天内过期",
+            "enabled": True,
+            "condition": {
+                "probe_type": "tls_cert",
+                "metric": "days_remaining",
+                "operator": "lt",
+                "threshold": 14,
+            },
+            "severity": "critical",
+            "cooldown_minutes": 1440,
+        },
+        {
+            "id": "port-down",
+            "name": "TCP 端口不通",
+            "enabled": True,
+            "condition": {
+                "probe_type": "tcp",
+                "metric": "status",
+                "operator": "eq",
+                "threshold": "failed",
+            },
+            "severity": "critical",
+            "cooldown_minutes": 30,
+        },
+    ],
+    "notifications": {
+        "channels": [],
+    },
+    "ai": {
+        "backend": "template",
+        "openai": {
+            "api_key": "${OPENAI_API_KEY}",
+            "model": "gpt-4o-mini",
+            "base_url": None,
+            "timeout_seconds": 30,
+        },
+        "ollama": {
+            "host": "http://localhost:11434",
+            "model": "qwen2.5:7b",
+            "timeout_seconds": 30,
+        },
+        "template": {
+            "rules_dir": None,
+        },
+        "timeout_seconds": 30,
+    },
 }
 
 
@@ -180,6 +343,7 @@ def load_config(path: Path) -> OpsConfig:
 
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        raw = _expand_env(raw)
         return OpsConfig.model_validate(raw)
     except ValidationError as exc:
         raise ConfigError(str(exc)) from exc

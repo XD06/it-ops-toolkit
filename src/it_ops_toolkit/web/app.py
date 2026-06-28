@@ -19,7 +19,7 @@ from .. import __version__
 from ..assets import AssetScanError, run_asset_scan
 from ..config import OpsConfig
 from ..health import HealthCheckError, run_health_check
-from ..models import Asset, Finding, ProbeResult, Report, TaskRun, TaskStatus
+from ..models import Asset, Finding, ProbeResult, Report, RiskLevel, TaskRun, TaskStatus
 from ..storage import SQLiteStore, TaskRecordNotFound
 from ..tasks import finish_task_run, get_task, list_tasks, new_task_run
 from .dashboard import render_dashboard
@@ -558,3 +558,849 @@ def _config_to_dict(config: OpsConfig) -> dict[str, Any]:
 def api_health() -> dict[str, str]:
     """返回 Web Console 自身健康状态。"""
     return {"status": "ok", "version": __version__}
+
+
+# ---------------------------------------------------------------------------
+# API 路由 — 历史趋势（Phase 6）
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/trends/targets", summary="可用趋势目标列表")
+def api_trend_targets(
+    probe_type: str | None = Query(default=None, description="按探针类型筛选"),
+) -> list[dict[str, Any]]:
+    """列出有历史数据的目标，用于趋势查询的目标选择。"""
+    from ..trend import list_available_targets
+
+    store = get_store()
+    return list_available_targets(store=store, probe_type=probe_type)
+
+
+@app.get("/api/trends/probe", summary="探针趋势详情")
+def api_trend_probe(
+    probe_type: str = Query(..., description="探针类型"),
+    target: str | None = Query(default=None, description="目标筛选"),
+    metric: str | None = Query(default=None, description="指定指标"),
+    days: int = Query(default=7, ge=1, le=365, description="查询天数范围"),
+    granularity: str = Query(default="daily", description="聚合粒度：daily / hourly"),
+) -> dict[str, Any]:
+    """返回探针的趋势数据，包含时间序列聚合和状态分布。"""
+    from ..trend import TrendError, get_trend
+
+    store = get_store()
+    try:
+        return get_trend(
+            store=store,
+            probe_type=probe_type,
+            target=target,
+            metric=metric,
+            days=days,
+            granularity=granularity,
+        )
+    except TrendError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/trends/summary", summary="趋势摘要")
+def api_trend_summary(
+    probe_type: str = Query(..., description="探针类型"),
+    target: str | None = Query(default=None, description="目标筛选"),
+    days: int = Query(default=7, ge=1, le=365, description="查询天数范围"),
+) -> dict[str, Any]:
+    """返回趋势摘要，适合 AI 消费或快速概览。"""
+    from ..trend import TrendError, get_trend_summary
+
+    store = get_store()
+    try:
+        return get_trend_summary(
+            store=store,
+            probe_type=probe_type,
+            target=target,
+            days=days,
+        )
+    except TrendError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# API 路由 — AI 运维助手（Phase 7）
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/ai/summarize/{task_id}", summary="AI 任务摘要")
+def api_ai_summarize(
+    task_id: str,
+    prompt: str | None = Query(default=None, description="自定义提示词"),
+) -> dict[str, Any]:
+    """对指定任务生成 AI 摘要。"""
+    from ..ai_copilot import AIAdapterError, summarize_task
+
+    config = get_config()
+    store = get_store()
+    try:
+        output = summarize_task(task_id=task_id, store=store, config=config, prompt=prompt)
+        return output.model_dump(mode="json")
+    except AIAdapterError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ai/explain/{task_id}", summary="AI 异常解释")
+def api_ai_explain(
+    task_id: str,
+    question: str | None = Query(default=None, description="自然语言提问"),
+) -> dict[str, Any]:
+    """解释指定任务中的异常。"""
+    from ..ai_copilot import AIAdapterError, explain_anomaly
+
+    config = get_config()
+    store = get_store()
+    try:
+        output = explain_anomaly(task_id=task_id, store=store, config=config, question=question)
+        return output.model_dump(mode="json")
+    except AIAdapterError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ai/weekly", summary="AI 周报摘要")
+def api_ai_weekly(
+    days: int = Query(default=7, ge=1, le=90, description="汇总天数"),
+    prompt: str | None = Query(default=None, description="自定义提示词"),
+) -> dict[str, Any]:
+    """生成 AI 周报摘要。"""
+    from ..ai_copilot import AIAdapterError, summarize_recent
+
+    config = get_config()
+    store = get_store()
+    try:
+        output = summarize_recent(store=store, config=config, days=days, prompt=prompt)
+        return output.model_dump(mode="json")
+    except AIAdapterError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/ai/logs", summary="AI 调用日志")
+def api_ai_logs(
+    task_id: str | None = Query(default=None, description="按任务 ID 筛选"),
+    limit: int = Query(default=50, ge=1, le=500, description="最多返回条数"),
+) -> list[dict[str, Any]]:
+    """查询 AI 调用审计日志。"""
+    store = get_store()
+    logs = store.list_ai_call_logs(task_id=task_id, limit=limit)
+    return [log.model_dump(mode="json") for log in logs]
+
+
+# ---------------------------------------------------------------------------
+# Phase 8：网络拓扑与资产关系
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/topology", summary="网络拓扑视图")
+def api_topology(
+    traceroute_target: str | None = Query(default=None, description="可选：traceroute 目标"),
+    max_hops: int = Query(default=15, ge=1, le=30, description="traceroute 最大跳数"),
+    reconcile: bool = Query(default=True, description="是否与资产库对比"),
+) -> dict[str, Any]:
+    """获取本机视角的网络拓扑。
+
+    包含本机接口、默认网关、ARP 表、可选 traceroute 和资产对比。
+    """
+    from ..topology import get_topology
+
+    store = get_store() if reconcile else None
+    view = get_topology(
+        store=store,
+        traceroute_target=traceroute_target,
+        max_hops=max_hops,
+    )
+    return view.model_dump(mode="json")
+
+
+@app.get("/api/topology/arp", summary="ARP 表")
+def api_topology_arp() -> list[dict[str, Any]]:
+    """采集本机 ARP 表。"""
+    from ..probes.arp import collect_arp_table
+
+    entries = collect_arp_table()
+    return [e.model_dump(mode="json") for e in entries]
+
+
+@app.get("/api/topology/unknown", summary="未知设备检测")
+def api_topology_unknown() -> list[dict[str, Any]]:
+    """检测 ARP 表中不在资产库的未知设备。"""
+    from ..probes.arp import collect_arp_table
+    from ..topology import detect_unknown_devices
+
+    store = get_store()
+    arp_entries = collect_arp_table()
+    unknown = detect_unknown_devices(arp_entries=arp_entries, store=store)
+    return [e.model_dump(mode="json") for e in unknown]
+
+
+@app.get("/api/topology/traceroute/{target}", summary="路由追踪")
+def api_topology_traceroute(
+    target: str,
+    max_hops: int = Query(default=15, ge=1, le=30, description="最大跳数"),
+) -> dict[str, Any]:
+    """对指定目标执行路由追踪。"""
+    from ..probes.traceroute import TraceRouteError, run_traceroute
+
+    try:
+        result = run_traceroute(target=target, max_hops=max_hops)
+    except TraceRouteError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return result.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# SNMP 探针
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/snmp/{target}", summary="SNMP 设备信息采集")
+def api_snmp_info(
+    target: str,
+    community: str = Query(default="public", description="SNMP community 字符串"),
+    port: int = Query(default=161, ge=1, le=65535, description="SNMP UDP 端口"),
+    timeout_ms: int = Query(default=3000, ge=500, le=10000, description="超时时间（毫秒）"),
+) -> dict[str, Any]:
+    """通过 SNMP v2c 采集设备基础信息（sysDescr、sysName、接口列表等）。"""
+    from ..probes.snmp import SnmpError, collect_snmp_info
+
+    store = get_store()
+    task = new_task_run(task_type="snmp_probe", source="web")
+    store.save_task_run(task)
+
+    result = collect_snmp_info(
+        task_id=task.id,
+        target=target,
+        community=community,
+        port=port,
+        timeout_ms=timeout_ms,
+    )
+    store.save_probe_result(result)
+
+    task = finish_task_run(
+        task,
+        status=TaskStatus.success if result.status == "success" else TaskStatus.failed,
+    )
+    store.save_task_run(task)
+
+    return result.model_dump(mode="json")
+
+
+@app.get("/api/snmp/{target}/get", summary="SNMP GET 单个 OID")
+def api_snmp_get(
+    target: str,
+    oid: str = Query(..., description="要查询的 OID"),
+    community: str = Query(default="public", description="SNMP community 字符串"),
+    port: int = Query(default=161, ge=1, le=65535, description="SNMP UDP 端口"),
+    timeout_ms: int = Query(default=3000, ge=500, le=10000, description="超时时间（毫秒）"),
+) -> dict[str, Any]:
+    """通过 SNMP v2c GET 查询单个 OID 的值。"""
+    from ..probes.snmp import SnmpError, snmp_get
+
+    try:
+        resp_oid, value = snmp_get(
+            target=target,
+            oid=oid,
+            community=community,
+            port=port,
+            timeout_ms=timeout_ms,
+        )
+    except SnmpError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    return {"oid": resp_oid, "value": value}
+
+
+# ---------------------------------------------------------------------------
+# Phase 9：受控 Agent 工作流
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/workflows", summary="可用工作流列表")
+def api_workflows_list() -> list[dict[str, Any]]:
+    """列出所有可用工作流定义。"""
+    from ..agent_workflow import get_builtin_workflows
+
+    workflows = get_builtin_workflows()
+    return [wf.model_dump(mode="json") for wf in workflows]
+
+
+class WorkflowRunRequest(BaseModel):
+    """工作流执行请求体。"""
+
+    confirm: bool = False
+    context: dict[str, Any] | None = None
+
+
+@app.post("/api/workflows/{name}/run", summary="执行工作流")
+def api_workflows_run(
+    name: str,
+    request: WorkflowRunRequest,
+) -> dict[str, Any]:
+    """执行指定工作流。"""
+    from ..agent_workflow import (
+        WorkflowError,
+        execute_workflow,
+        get_workflow_by_name,
+    )
+
+    config = get_config()
+    store = get_store()
+
+    try:
+        wf = get_workflow_by_name(name)
+    except WorkflowError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    execution = execute_workflow(
+        workflow=wf,
+        store=store,
+        config=config,
+        trigger="web",
+        context=request.context,
+        auto_approve_low_risk=request.confirm,
+    )
+    return execution.model_dump(mode="json")
+
+
+@app.get("/api/workflows/executions", summary="工作流执行历史")
+def api_workflows_executions(
+    workflow_name: str | None = Query(default=None, description="按工作流名称筛选"),
+    status: str | None = Query(default=None, description="按状态筛选"),
+    limit: int = Query(default=50, ge=1, le=500, description="最多返回条数"),
+) -> list[dict[str, Any]]:
+    """查询工作流执行历史。"""
+    store = get_store()
+    executions = store.list_workflow_executions(
+        limit=limit,
+        workflow_name=workflow_name,
+        status=status,
+    )
+    return [e.model_dump(mode="json") for e in executions]
+
+
+@app.get("/api/workflows/executions/{execution_id}", summary="工作流执行详情")
+def api_workflows_execution_detail(
+    execution_id: str,
+) -> dict[str, Any]:
+    """查看工作流执行详情。"""
+    store = get_store()
+    execution = store.get_workflow_execution(execution_id)
+    if execution is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"workflow execution not found: {execution_id}",
+        )
+    return execution.model_dump(mode="json")
+
+
+# ---------------------------------------------------------------------------
+# 操作中心 — 通过 Web 触发领域服务
+# ---------------------------------------------------------------------------
+
+
+class DiagnoseRequest(BaseModel):
+    """诊断触发请求体。"""
+
+    scenario: str  # internet / intranet / rdp / printer / dns / slow_network
+    target: str | None = None  # intranet=URL, rdp/printer=host[:port], dns=域名
+    expected_ip: str | None = None
+    tcp_port: int | None = None
+    dns_servers: list[str] | None = None
+    timeout_ms: int = 1000
+    retries: int = 1
+
+
+@app.post("/api/ops/diagnose", summary="触发诊断任务")
+def api_ops_diagnose(req: DiagnoseRequest) -> dict[str, Any]:
+    """通过领域服务触发一次诊断任务。
+
+    支持 6 种场景：internet / intranet / rdp / printer / dns / slow_network
+    """
+    config = get_config()
+    store = get_store()
+
+    scenario = req.scenario.strip().lower()
+    valid_scenarios = {"internet", "intranet", "rdp", "printer", "dns", "slow_network"}
+    if scenario not in valid_scenarios:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid scenario: {scenario}. supported: {sorted(valid_scenarios)}",
+        )
+
+    if scenario in {"intranet", "rdp", "printer", "dns"} and not req.target:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scenario '{scenario}' requires 'target' parameter",
+        )
+
+    timeout = req.timeout_ms or config.probe_defaults.timeout_ms
+    retries = req.retries if req.retries is not None else config.probe_defaults.retries
+
+    from ..diagnosis import (
+        run_dns_diagnosis,
+        run_internet_diagnosis,
+        run_intranet_diagnosis,
+        run_printer_diagnosis,
+        run_rdp_diagnosis,
+        run_slow_network_diagnosis,
+    )
+
+    task = new_task_run(task_type="diagnosis", requested_by="web")
+    task = task.model_copy(update={"source": "web", "risk_level": RiskLevel.read_only})
+    store.save_task_run(task)
+
+    try:
+        if scenario == "internet":
+            results, summary = run_internet_diagnosis(
+                task=task, store=store, timeout_ms=timeout, retries=retries,
+            )
+        elif scenario == "slow_network":
+            results, summary = run_slow_network_diagnosis(
+                task=task, store=store, timeout_ms=timeout, retries=retries,
+            )
+        elif scenario == "intranet":
+            results, summary = run_intranet_diagnosis(
+                task=task, store=store, url=req.target, timeout_ms=timeout, retries=retries,
+            )
+        elif scenario == "rdp":
+            results, summary = run_rdp_diagnosis(
+                task=task, store=store, target=req.target, timeout_ms=timeout, retries=retries,
+            )
+        elif scenario == "printer":
+            results, summary = run_printer_diagnosis(
+                task=task, store=store, target=req.target, timeout_ms=timeout, retries=retries,
+            )
+        elif scenario == "dns":
+            results, summary = run_dns_diagnosis(
+                task=task, store=store, name=req.target,
+                expected_ip=req.expected_ip, tcp_port=req.tcp_port,
+                dns_servers=req.dns_servers, timeout_ms=timeout,
+            )
+    except ValueError as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"diagnosis failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(
+        update={
+            "result_refs": [r.id for r in results],
+            "target_refs": [r.target.value for r in results],
+            "summary": {
+                "scenario": scenario,
+                "title": summary.title,
+                "likely_area": summary.likely_area,
+                "recommendation": summary.recommendation,
+            },
+        }
+    )
+    store.save_task_run(task)
+    return _task_to_dict(task)
+
+
+@app.post("/api/ops/security-check", summary="触发安全检查")
+def api_ops_security_check() -> dict[str, Any]:
+    """基于已发现资产执行安全检查。"""
+    config = get_config()
+    store = get_store()
+
+    from ..security import run_security_check
+
+    task = new_task_run(task_type="security_check", requested_by="web")
+    task = task.model_copy(update={"source": "web", "risk_level": RiskLevel.read_only})
+    store.save_task_run(task)
+
+    try:
+        findings = run_security_check(config=config, task=task, store=store)
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"security check failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(
+        update={
+            "result_refs": [f.id for f in findings],
+            "summary": {"findings_count": len(findings)},
+        }
+    )
+    store.save_task_run(task)
+    return _task_to_dict(task)
+
+
+class CertCheckRequest(BaseModel):
+    """证书检查请求体。"""
+
+    hostname: str
+    port: int = 443
+    warning_days: int = 30
+
+
+@app.post("/api/ops/cert-check", summary="触发证书检查")
+def api_ops_cert_check(req: CertCheckRequest) -> dict[str, Any]:
+    """检查 TLS 证书过期风险。"""
+    store = get_store()
+
+    from ..security import run_certificate_check
+
+    task = new_task_run(task_type="security_check", requested_by="web")
+    task = task.model_copy(update={"source": "web", "risk_level": RiskLevel.read_only})
+    store.save_task_run(task)
+
+    try:
+        result, findings = run_certificate_check(
+            task=task, store=store, hostname=req.hostname,
+            port=req.port, warning_days=req.warning_days,
+        )
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"cert check failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(
+        update={
+            "result_refs": [result.id] + [f.id for f in findings],
+            "target_refs": [req.hostname],
+        }
+    )
+    store.save_task_run(task)
+    return _task_to_dict(task)
+
+
+class ReportGenerateRequest(BaseModel):
+    """报告生成请求体。"""
+
+    source_task_id: str
+    report_format: str = "markdown"  # markdown / csv / json
+
+
+@app.post("/api/ops/report-generate", summary="触发报告生成")
+def api_ops_report_generate(req: ReportGenerateRequest) -> dict[str, Any]:
+    """基于指定任务生成报告。"""
+    config = get_config()
+    store = get_store()
+
+    from ..reports import ReportError, generate_report
+
+    task = new_task_run(task_type="report_generate", requested_by="web")
+    task = task.model_copy(update={"source": "web", "risk_level": RiskLevel.read_only})
+    store.save_task_run(task)
+
+    try:
+        report = generate_report(
+            store=store,
+            source_task_id=req.source_task_id,
+            output_dir=config.reports.output_dir,
+            report_format=req.report_format,
+        )
+    except ReportError as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"report generation failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(
+        update={"summary": {"report_id": report.id, "report_path": report.path}}
+    )
+    store.save_task_run(task)
+    return _task_to_dict(task)
+
+
+class AssetDiffRequest(BaseModel):
+    """资产对比请求体。"""
+
+    profile_name: str
+    tcp_without_ping: bool = False
+
+
+@app.post("/api/ops/asset-diff", summary="触发资产变化对比")
+def api_ops_asset_diff(req: AssetDiffRequest) -> dict[str, Any]:
+    """执行资产变化对比。"""
+    config = get_config()
+    store = get_store()
+
+    if req.profile_name not in config.scan_profiles:
+        raise HTTPException(
+            status_code=400,
+            detail=f"scan profile not found: {req.profile_name}",
+        )
+
+    from ..assets import AssetScanError, run_asset_diff
+
+    task = new_task_run(task_type="asset_diff", requested_by="web")
+    task = task.model_copy(update={"source": "web", "risk_level": RiskLevel.read_only})
+    store.save_task_run(task)
+
+    try:
+        assets, results, findings, summary = run_asset_diff(
+            config=config, profile_name=req.profile_name,
+            task=task, store=store, tcp_without_ping=req.tcp_without_ping,
+        )
+    except AssetScanError as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"asset diff failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(
+        update={
+            "result_refs": [r.id for r in results] + [f.id for f in findings],
+            "target_refs": [a.ip for a in assets],
+            "summary": summary,
+        }
+    )
+    store.save_task_run(task)
+    return _task_to_dict(task)
+
+
+class FlushDnsRequest(BaseModel):
+    """清理 DNS 缓存请求体。"""
+
+    dry_run: bool = True
+    confirm: bool = False
+
+
+@app.post("/api/ops/flush-dns", summary="触发清理本机 DNS 缓存")
+def api_ops_flush_dns(req: FlushDnsRequest) -> dict[str, Any]:
+    """清理本机 DNS 缓存（低风险变更操作）。
+
+    - dry_run=true：只生成计划，不执行
+    - confirm=true：实际执行清理
+    """
+    store = get_store()
+
+    from ..automation import AutomationError, run_flush_dns_cache
+
+    task = new_task_run(task_type="automation", requested_by="web")
+    task = task.model_copy(update={"source": "web", "risk_level": RiskLevel.low_change})
+    store.save_task_run(task)
+
+    try:
+        result = run_flush_dns_cache(
+            task=task, dry_run=req.dry_run, confirm=req.confirm,
+        )
+    except AutomationError as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"flush-dns failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(update={"summary": result})
+    store.save_task_run(task)
+    return _task_to_dict(task)
+
+
+@app.post("/api/ops/collect-local", summary="触发本机信息采集")
+def api_ops_collect_local() -> dict[str, Any]:
+    """采集本机系统和网络排障上下文。"""
+    store = get_store()
+
+    from ..local_collect import collect_local_snapshot
+
+    task = new_task_run(task_type="ops_collect", requested_by="web")
+    task = task.model_copy(update={"source": "web", "risk_level": RiskLevel.read_only})
+    store.save_task_run(task)
+
+    try:
+        snapshot = collect_local_snapshot(task=task, store=store)
+    except Exception as exc:
+        task = finish_task_run(task, status=TaskStatus.failed)
+        store.save_task_run(task)
+        raise HTTPException(status_code=500, detail=f"collect local info failed: {exc}") from exc
+
+    task = finish_task_run(task, status=TaskStatus.success)
+    task = task.model_copy(
+        update={"summary": {"hostname": snapshot.hostname, "os": snapshot.os_name}}
+    )
+    store.save_task_run(task)
+    return _task_to_dict(task)
+
+
+# ---------------------------------------------------------------------------
+# 调度管理 — 定时任务 CRUD + 告警事件
+# ---------------------------------------------------------------------------
+
+
+class ScheduleCreateRequest(BaseModel):
+    """创建定时任务请求体。"""
+
+    name: str
+    task_type: str  # health_check / security_check / asset_scan
+    profile: str = "default"
+    cron: str
+    enabled: bool = True
+    alert_on: list[str] = ["warning", "critical"]
+
+
+@app.get("/api/schedules", summary="定时任务列表")
+def api_schedules_list() -> list[dict[str, Any]]:
+    """列出所有定时任务。"""
+    store = get_store()
+    tasks = store.list_scheduled_tasks()
+    return [t.model_dump(mode="json") for t in tasks]
+
+
+@app.post("/api/schedules", summary="添加定时任务")
+def api_schedules_add(req: ScheduleCreateRequest) -> dict[str, Any]:
+    """添加一个新的定时任务。"""
+    from ..scheduler import CronExpression, SchedulerError, create_scheduled_task
+
+    # 验证 cron 表达式
+    try:
+        CronExpression(req.cron)
+    except SchedulerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    valid_types = {"health_check", "security_check", "asset_scan"}
+    if req.task_type not in valid_types:
+        raise HTTPException(
+            status_code=400,
+            detail=f"invalid task_type: {req.task_type}. supported: {sorted(valid_types)}",
+        )
+
+    store = get_store()
+
+    # 检查名称是否重复
+    task_id = f"schedule-{req.name}"
+    if store.get_scheduled_task(task_id) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"schedule task with name '{req.name}' already exists",
+        )
+
+    task = create_scheduled_task(
+        name=req.name,
+        task_type=req.task_type,
+        profile=req.profile,
+        cron=req.cron,
+        enabled=req.enabled,
+        alert_on=req.alert_on,
+    )
+    store.save_scheduled_task(task)
+    return task.model_dump(mode="json")
+
+
+@app.delete("/api/schedules/{task_id}", summary="删除定时任务")
+def api_schedules_delete(task_id: str) -> dict[str, Any]:
+    """删除指定定时任务。"""
+    store = get_store()
+    task = store.get_scheduled_task(task_id)
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"schedule task not found: {task_id}",
+        )
+    store.delete_scheduled_task(task_id)
+    return {"deleted": True, "task_id": task_id}
+
+
+@app.post("/api/schedules/{task_id}/enable", summary="启用定时任务")
+def api_schedules_enable(task_id: str) -> dict[str, Any]:
+    """启用指定定时任务。"""
+    store = get_store()
+    task = store.get_scheduled_task(task_id)
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"schedule task not found: {task_id}",
+        )
+
+    from ..scheduler import CronExpression
+
+    updated = task.model_copy(update={"enabled": True})
+    if updated.next_run is None:
+        cron = CronExpression(updated.cron)
+        from datetime import UTC, datetime
+        updated = updated.model_copy(
+            update={"next_run": cron.next_run_after(datetime.now(UTC))}
+        )
+    store.save_scheduled_task(updated)
+    return updated.model_dump(mode="json")
+
+
+@app.post("/api/schedules/{task_id}/disable", summary="禁用定时任务")
+def api_schedules_disable(task_id: str) -> dict[str, Any]:
+    """禁用指定定时任务。"""
+    store = get_store()
+    task = store.get_scheduled_task(task_id)
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"schedule task not found: {task_id}",
+        )
+
+    updated = task.model_copy(update={"enabled": False})
+    store.save_scheduled_task(updated)
+    return updated.model_dump(mode="json")
+
+
+@app.post("/api/schedules/{task_id}/run-now", summary="立即执行定时任务")
+def api_schedules_run_now(task_id: str) -> dict[str, Any]:
+    """立即执行一次定时任务（不等调度时间）。"""
+    config = get_config()
+    store = get_store()
+
+    from ..scheduler import SchedulerEngine
+
+    engine = SchedulerEngine(config=config, store=store)
+    task = engine.run_task_now(task_id)
+    if task is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"schedule task not found: {task_id}",
+        )
+    return task.model_dump(mode="json")
+
+
+@app.get("/api/alerts", summary="告警事件列表")
+def api_alerts_list(
+    status: str | None = None,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """列出告警事件，支持按状态筛选。"""
+    store = get_store()
+    events = store.list_alert_events(status=status, limit=limit)
+    return [e.model_dump(mode="json") for e in events]
+
+
+@app.post("/api/alerts/{event_id}/acknowledge", summary="确认告警事件")
+def api_alerts_acknowledge(event_id: str) -> dict[str, Any]:
+    """确认（标记已处理）告警事件。"""
+    store = get_store()
+    event = store.get_alert_event(event_id)
+    if event is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"alert event not found: {event_id}",
+        )
+
+    from datetime import UTC, datetime
+
+    updated = event.model_copy(
+        update={
+            "acknowledged": True,
+            "acknowledged_at": datetime.now(UTC),
+        }
+    )
+    store.save_alert_event(updated)
+    return updated.model_dump(mode="json")
